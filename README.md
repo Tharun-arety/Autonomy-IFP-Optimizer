@@ -24,6 +24,8 @@ The repository ships two saved demonstration runs in `outputs/`. The tables belo
 | Estimated cycle time | 1.075 s | 1.176 s | +9.4% |
 | Estimated material usage | 0.439 g | 0.927 g | +111.4% |
 
+The compliance objective minimizes global displacement, not local stress; routing load more directly through the deposited fiber path reduces deflection at the cost of higher peak stress near the deposition zone. The peak value in this demo (`11.09 MPa`) remains far below typical CFRP failure strengths.
+
 ### Robotic Limb Routing
 
 | Metric | Baseline | Optimized | Change |
@@ -136,15 +138,21 @@ The Flax surrogate is trained on FEM-labeled optimizer outputs, not on an alignm
 - thickness penalty, and
 - keep-out penalty.
 
-The checked-in smoke test in `outputs/surrogate_smoke/surrogate_metrics.json` reports:
+The checked-in smoke test in `outputs/surrogate_smoke/surrogate_metrics.json` is a functional pipeline check, not a trained surrogate benchmark. It uses `64` samples and `10` epochs, which is enough to validate dataset generation, serialization, and forward-pass latency, but not to characterize model accuracy. Production surrogate quality requires `1,000+` samples and `200+` epochs.
+
+The smoke test reports:
 
 - training samples: `64`
 - epochs: `10`
-- validation normalized MSE: `1.859`
-- validation RMSE: `15.010`
 - surrogate inference latency: `11.41 ms`
 
 The intended workflow is to use the surrogate to screen many candidate courses quickly, then refine promising candidates with the full differentiable FEM objective.
+
+## Roadmap
+
+- Extend the optimizer from one-course routing to multi-course cooperative planning and sequencing.
+- Replace the current dense direct solve with a sparse CG solver to extend the FEM to production-scale mesh densities.
+- Expand the geometry stack from supported analytic surface families to imported CAD-driven shell extraction and meshing.
 
 ## CLI Workflow
 
@@ -286,7 +294,7 @@ Autonomy-IFP-Optimizer/
 
 This repository is materially stronger than the earlier heuristic model, but it is still a reduced-order structural planner rather than a production composite analysis stack.
 
-- The structural term is an orthotropic membrane FEM. It does not include bending stiffness, out-of-plane displacement, progressive damage, ply drop-off logic, or a full shell formulation.
+- The structural term is an orthotropic membrane FEM with a dense direct solve in the current implementation. It does not include bending stiffness, out-of-plane displacement, progressive damage, ply drop-off logic, or a full shell formulation.
 - The plate and cylinder demos use analytic surface families and Gmsh-generated conformal triangle meshes. Arbitrary CAD parameterization and imported shell extraction are not implemented.
 - The planner optimizes one Bezier course at a time. It does not do coverage planning, multi-course sequencing, seam management, or overlap scheduling.
 - The robot export provides local tool orientation from the optimized surface path, but it does not do joint-space planning, collision checking, or singularity avoidance.

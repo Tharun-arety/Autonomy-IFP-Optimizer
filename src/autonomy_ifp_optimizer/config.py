@@ -38,6 +38,7 @@ class OptimizationConfig:
     fiber_layer_thickness_m: float = 2.2e-4
     matrix_modulus_pa: float = 6.5e9
     matrix_poisson: float = 0.34
+    # T300/standard epoxy UD ply - replace with actual material datasheet values.
     fiber_modulus_longitudinal_pa: float = 135.0e9
     fiber_modulus_transverse_pa: float = 9.5e9
     fiber_shear_modulus_pa: float = 5.2e9
