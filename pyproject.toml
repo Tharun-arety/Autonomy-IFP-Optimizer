@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomy-ifp-optimizer"
+version = "0.1.0"
+description = "Differentiable Infinite Fiber Placement path planning engine for autonomous composites manufacturing"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jax",
+    "jaxlib",
+    "optax",
+    "flax",
+    "numpy",
+    "scipy",
+    "trimesh",
+    "pyvista",
+    "matplotlib",
+]
+
+[project.scripts]
+autonomy-ifp-optimizer = "autonomy_ifp_optimizer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
