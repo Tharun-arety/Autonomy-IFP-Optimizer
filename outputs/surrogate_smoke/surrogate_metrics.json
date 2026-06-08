@@ -1,0 +1,20 @@
+{
+  "surface": "plate_with_hole",
+  "samples": 64,
+  "epochs": 10,
+  "validation_mse_normalized": 1.858819603919983,
+  "validation_rmse": 15.009750366210938,
+  "inference_latency_ms": 9.63920000140206,
+  "history": [
+    {
+      "epoch": 0,
+      "train_mse": 1.0417416095733643,
+      "val_mse": 2.0804688930511475
+    },
+    {
+      "epoch": 9,
+      "train_mse": 0.7476511001586914,
+      "val_mse": 1.858819603919983
+    }
+  ]
+}

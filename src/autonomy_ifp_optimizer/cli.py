@@ -19,7 +19,7 @@ def _parse_direction(text: str) -> tuple[float, float, float]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Differentiable IFP optimizer for autonomous composites workflows.")
+    parser = argparse.ArgumentParser(description="Differentiable IFP optimizer with orthotropic membrane FEM for autonomous composites workflows.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     optimize = subparsers.add_parser("optimize", help="Optimize a differentiable IFP path on a supported surface.")
@@ -69,8 +69,11 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
     print(f"Optimized surface     : {result['surface']['name']} ({result['surface']['kind']})")
     print(f"Objective             : {result['metrics']['objective']:.4f}")
+    print(f"Normalized compliance : {result['metrics']['normalized_compliance']:.4f}")
+    print(f"Compliance            : {result['metrics']['compliance_n_m']:.6f} N*m")
     print(f"Min steering radius   : {result['metrics']['min_steering_radius_mm']:.2f} mm")
     print(f"Peak thickness        : {result['metrics']['peak_thickness']:.3f}")
+    print(f"Max displacement      : {result['metrics']['maximum_displacement_mm']:.4f} mm")
     print(f"Estimated cycle time  : {result['metrics']['estimated_cycle_time_s']:.2f} s")
     print(f"Manufacturable        : {result['metrics']['manufacturable']}")
     print(f"Artifacts written to  : {outdir.resolve()}")

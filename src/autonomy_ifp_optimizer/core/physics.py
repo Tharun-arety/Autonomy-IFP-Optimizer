@@ -15,7 +15,8 @@ from .constraints import (
     steering_penalty,
     thickness_penalty,
 )
-from .geometry import SurfaceDefinition, preferred_fiber_direction, stress_weight, surface_normals, surface_xyz
+from .fem import MembraneFEMModel, prepare_membrane_fem_model, solve_membrane_response
+from .geometry import SurfaceDefinition, surface_normals, surface_plane_coordinates, surface_xyz
 
 
 def _normalize(vector: jnp.ndarray, eps: float = 1.0e-8) -> jnp.ndarray:
@@ -120,18 +121,17 @@ def evaluate_raw_design(
     surface: SurfaceDefinition,
     load_case: LoadCase,
     config: OptimizationConfig,
+    fem_model: MembraneFEMModel | None = None,
 ) -> dict[str, jnp.ndarray]:
+    fem_model = fem_model or prepare_membrane_fem_model(surface, load_case, config)
+
     control_points, thickness_scale = control_points_from_raw(raw_params, surface, config)
     _, uv_path = sample_cubic_bezier(control_points, config.num_path_samples)
     xyz_path = surface_xyz(surface, uv_path)
+    path_xy_m = surface_plane_coordinates(surface, uv_path)
     normals = surface_normals(surface, uv_path)
     tangents, radius_profile_m, total_length_m = _curve_metrics(xyz_path)
-
-    preferred = preferred_fiber_direction(surface, uv_path, load_case.direction_xyz)
-    alignment = jnp.abs(jnp.sum(tangents * preferred, axis=-1))
-    stress = stress_weight(surface, uv_path)
-    stiffness_proxy = thickness_scale * jnp.mean(stress * (0.25 + 0.75 * alignment))
-    compliance_proxy = (load_case.magnitude_n / 500.0) / jnp.maximum(stiffness_proxy, 1.0e-4)
+    fem_response = solve_membrane_response(uv_path, path_xy_m, thickness_scale, fem_model, config)
 
     chord_length = jnp.linalg.norm(xyz_path[-1] - xyz_path[0]) + 1.0e-6
     length_ratio = total_length_m / chord_length
@@ -143,7 +143,7 @@ def evaluate_raw_design(
     smooth_loss = smoothness_penalty(control_points)
 
     total_loss = (
-        config.structural_weight * compliance_proxy
+        config.structural_weight * fem_response["normalized_compliance"]
         + config.length_weight * length_ratio
         + config.steering_weight * steer_loss
         + config.thickness_weight * thick_loss
@@ -158,14 +158,14 @@ def evaluate_raw_design(
         "thickness_scale": thickness_scale,
         "path_uv": uv_path,
         "path_xyz": xyz_path,
+        "path_xy_m": path_xy_m,
         "normals": normals,
         "tangents": tangents,
         "radius_profile_m": radius_profile_m,
-        "stress_weight": stress,
-        "alignment": alignment,
         "thickness_field": thickness_field_map,
-        "stiffness_proxy": stiffness_proxy,
-        "compliance_proxy": compliance_proxy,
+        "compliance_n_m": fem_response["compliance_n_m"],
+        "normalized_compliance": fem_response["normalized_compliance"],
+        "reference_compliance_n_m": fem_response["reference_compliance_n_m"],
         "path_length_m": total_length_m,
         "length_ratio": length_ratio,
         "steering_penalty": steer_loss,
@@ -178,19 +178,23 @@ def evaluate_raw_design(
         "thickness_std": thickness_stats["thickness_std"],
         "min_steering_radius_m": jnp.min(radius_profile_m),
         "minimum_keepout_clearance_uv": jnp.min(keepout_clearance),
+        "fem": fem_response,
     }
 
 
 def _scalar_history_entry(step: int, aux: dict[str, jnp.ndarray]) -> dict[str, float]:
+    fem = aux["fem"]
     return {
         "step": float(step),
         "loss": float(aux["loss"]),
-        "compliance_proxy": float(aux["compliance_proxy"]),
-        "stiffness_proxy": float(aux["stiffness_proxy"]),
+        "normalized_compliance": float(aux["normalized_compliance"]),
+        "compliance_n_m": float(aux["compliance_n_m"]),
         "path_length_m": float(aux["path_length_m"]),
         "min_steering_radius_m": float(aux["min_steering_radius_m"]),
         "peak_thickness": float(aux["peak_thickness"]),
         "minimum_keepout_clearance_uv": float(aux["minimum_keepout_clearance_uv"]),
+        "maximum_displacement_m": float(fem["maximum_displacement_m"]),
+        "solver_residual_norm": float(fem["solver_residual_norm"]),
         "steering_penalty": float(aux["steering_penalty"]),
         "thickness_penalty": float(aux["thickness_penalty"]),
         "keepout_penalty": float(aux["keepout_penalty"]),
@@ -220,6 +224,7 @@ def optimize_ifp_path(
 ) -> dict[str, object]:
     load_case = load_case or LoadCase()
     config = config or OptimizationConfig()
+    fem_model = prepare_membrane_fem_model(surface, load_case, config)
 
     raw_params = initial_raw_params(surface, config)
     optimizer = optax.chain(
@@ -233,12 +238,14 @@ def optimize_ifp_path(
     history: list[dict[str, float]] = []
 
     def loss_fn(params: jnp.ndarray) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
-        aux = evaluate_raw_design(params, surface, load_case, config)
+        aux = evaluate_raw_design(params, surface, load_case, config, fem_model=fem_model)
         return aux["loss"], aux
+
+    loss_and_grad = jax.jit(jax.value_and_grad(loss_fn, has_aux=True))
 
     for step in range(config.steps):
         current_params = raw_params
-        (loss_value, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(current_params)
+        (loss_value, aux), grads = loss_and_grad(current_params)
         updates, opt_state = optimizer.update(grads, opt_state, current_params)
         raw_params = optax.apply_updates(current_params, updates)
 
@@ -249,11 +256,13 @@ def optimize_ifp_path(
         if step % config.history_stride == 0 or step == config.steps - 1:
             history.append(_scalar_history_entry(step, aux))
 
-    final = evaluate_raw_design(best_params, surface, load_case, config)
+    final = evaluate_raw_design(best_params, surface, load_case, config, fem_model=fem_model)
+    fem = final["fem"]
     metrics = {
         "objective": float(final["loss"]),
-        "stiffness_proxy": float(final["stiffness_proxy"]),
-        "compliance_proxy": float(final["compliance_proxy"]),
+        "compliance_n_m": float(final["compliance_n_m"]),
+        "normalized_compliance": float(final["normalized_compliance"]),
+        "reference_compliance_n_m": float(final["reference_compliance_n_m"]),
         "path_length_m": float(final["path_length_m"]),
         "length_ratio": float(final["length_ratio"]),
         "min_steering_radius_m": float(final["min_steering_radius_m"]),
@@ -265,6 +274,14 @@ def optimize_ifp_path(
         "thickness_limit": config.max_thickness,
         "minimum_keepout_clearance_uv": float(final["minimum_keepout_clearance_uv"]),
         "thickness_scale": float(final["thickness_scale"]),
+        "maximum_displacement_m": float(fem["maximum_displacement_m"]),
+        "maximum_displacement_mm": 1000.0 * float(fem["maximum_displacement_m"]),
+        "mean_loaded_edge_displacement_m": float(fem["mean_loaded_edge_displacement_m"]),
+        "mean_loaded_edge_displacement_mm": 1000.0 * float(fem["mean_loaded_edge_displacement_m"]),
+        "maximum_von_mises_pa": float(jnp.max(fem["element_von_mises_pa"])),
+        "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
+        "solver_residual_norm": float(fem["solver_residual_norm"]),
+        "finite_element_mesh": [config.fem_elements_u, config.fem_elements_v],
     }
     metrics["manufacturable"] = bool(
         metrics["min_steering_radius_m"] >= config.min_steering_radius_m
@@ -274,8 +291,8 @@ def optimize_ifp_path(
 
     objective_terms = {
         "loss": float(final["loss"]),
-        "compliance_proxy": float(final["compliance_proxy"]),
-        "stiffness_proxy": float(final["stiffness_proxy"]),
+        "normalized_compliance": float(final["normalized_compliance"]),
+        "compliance_n_m": float(final["compliance_n_m"]),
         "length_ratio": float(final["length_ratio"]),
         "steering_penalty": float(final["steering_penalty"]),
         "thickness_penalty": float(final["thickness_penalty"]),
@@ -291,12 +308,12 @@ def optimize_ifp_path(
         "control_points_uv": np.asarray(final["control_points_uv"]).tolist(),
         "path_uv": np.asarray(final["path_uv"]).tolist(),
         "path_xyz": np.asarray(final["path_xyz"]).tolist(),
+        "path_xy_m": np.asarray(final["path_xy_m"]).tolist(),
         "normals": np.asarray(final["normals"]).tolist(),
         "tangents": np.asarray(final["tangents"]).tolist(),
         "radius_profile_m": np.asarray(final["radius_profile_m"]).tolist(),
-        "stress_weight": np.asarray(final["stress_weight"]).tolist(),
-        "alignment": np.asarray(final["alignment"]).tolist(),
         "thickness_field": np.asarray(final["thickness_field"]).tolist(),
+        "fem": _serialize_mapping(final["fem"]),
         "objective_terms": objective_terms,
         "metrics": metrics,
         "history": history,

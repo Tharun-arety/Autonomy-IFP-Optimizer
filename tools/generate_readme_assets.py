@@ -52,8 +52,16 @@ def _load_case(case: dict[str, str]) -> dict[str, object]:
         "path_uv": np.asarray(optimized["path_uv"], dtype=float),
         "control_points_uv": np.asarray(optimized["control_points_uv"], dtype=float),
         "radius_profile_mm": 1000.0 * np.asarray(optimized["radius_profile_m"], dtype=float),
+        "fem_mesh_shape": tuple(int(value) for value in optimized["fem"]["mesh_shape"]),
+        "fem_node_uv": np.asarray(optimized["fem"]["node_uv"], dtype=float),
+        "fem_node_displacement_mm": 1000.0 * np.asarray(optimized["fem"]["node_displacement_magnitude_m"], dtype=float),
+        "fem_element_centers_uv": np.asarray(optimized["fem"]["element_centers_uv"], dtype=float),
+        "fem_active_elements": np.asarray(optimized["fem"]["active_elements"], dtype=bool),
+        "fem_von_mises_mpa": 1.0e-6 * np.asarray(optimized["fem"]["element_von_mises_pa"], dtype=float),
         "history_steps": np.asarray([point["step"] for point in history], dtype=float),
         "history_loss": np.asarray([point["loss"] for point in history], dtype=float),
+        "history_compliance": np.asarray([point["normalized_compliance"] for point in history], dtype=float),
+        "history_displacement_mm": 1000.0 * np.asarray([point["maximum_displacement_m"] for point in history], dtype=float),
         "history_steering": np.asarray([point["steering_penalty"] for point in history], dtype=float),
         "history_thickness": np.asarray([point["thickness_penalty"] for point in history], dtype=float),
         "history_keepout": np.asarray([point["keepout_penalty"] for point in history], dtype=float),
@@ -72,11 +80,13 @@ def _metric_lines(case_data: dict[str, object]) -> list[str]:
     lines = [
         f"Manufacturable: {'yes' if metrics['manufacturable'] else 'no'}",
         f"Objective: {metrics['objective']:.3f} ({case_data['objective_drop_pct']:+.1f}% vs step 0)",
+        f"Normalized compliance: {metrics['normalized_compliance']:.3f}",
+        f"Compliance: {metrics['compliance_n_m']:.4f} N*m",
+        f"Loaded-edge displacement: {metrics['mean_loaded_edge_displacement_mm']:.3f} mm",
         f"Path length: {metrics['path_length_m']:.3f} m",
         f"Min steering radius: {metrics['min_steering_radius_mm']:.1f} mm",
+        f"Peak stress: {metrics['maximum_von_mises_mpa']:.2f} MPa",
         f"Cycle time: {metrics['estimated_cycle_time_s']:.3f} s",
-        f"Material weight: {metrics['estimated_material_weight_g']:.3f} g",
-        f"Toolpath points: {metrics['toolpath_points']}",
     ]
     if keep_outs:
         lines.append(f"Keep-out clearance: {clearance:.3f} uv")
@@ -212,15 +222,14 @@ def create_optimization_profiles(case_data: list[dict[str, object]], output_path
     for item in case_data:
         axes[0].plot(
             item["history_steps"],
-            item["history_loss"],
+            item["history_compliance"],
             linewidth=2.4,
             color=item["meta"]["color"],
             label=item["meta"]["title"],
         )
-    axes[0].set_yscale("log")
-    axes[0].set_title("Objective value over optimization steps", fontsize=12.5, weight="bold")
+    axes[0].set_title("Normalized compliance over optimization steps", fontsize=12.5, weight="bold")
     axes[0].set_xlabel("Step")
-    axes[0].set_ylabel("Loss (log scale)")
+    axes[0].set_ylabel("Compliance / reference")
     axes[0].grid(True, linestyle="--", alpha=0.3)
     axes[0].legend(frameon=False, fontsize=9)
 
@@ -238,23 +247,23 @@ def create_optimization_profiles(case_data: list[dict[str, object]], output_path
     axes[1].set_ylabel("Radius [mm]")
     axes[1].grid(True, linestyle="--", alpha=0.3)
 
-    metric_names = ["Path length [m]", "Cycle time [s]", "Material [g]"]
+    metric_names = ["Compliance [N*m]", "Loaded-edge disp [mm]", "Peak stress [MPa]"]
     drone_values = [
-        float(case_data[0]["metrics"]["path_length_m"]),
-        float(case_data[0]["metrics"]["estimated_cycle_time_s"]),
-        float(case_data[0]["metrics"]["estimated_material_weight_g"]),
+        float(case_data[0]["metrics"]["compliance_n_m"]),
+        float(case_data[0]["metrics"]["mean_loaded_edge_displacement_mm"]),
+        float(case_data[0]["metrics"]["maximum_von_mises_mpa"]),
     ]
     limb_values = [
-        float(case_data[1]["metrics"]["path_length_m"]),
-        float(case_data[1]["metrics"]["estimated_cycle_time_s"]),
-        float(case_data[1]["metrics"]["estimated_material_weight_g"]),
+        float(case_data[1]["metrics"]["compliance_n_m"]),
+        float(case_data[1]["metrics"]["mean_loaded_edge_displacement_mm"]),
+        float(case_data[1]["metrics"]["maximum_von_mises_mpa"]),
     ]
     y_pos = np.arange(len(metric_names))
     axes[2].barh(y_pos + 0.16, drone_values, height=0.28, color=case_data[0]["meta"]["color"], label=case_data[0]["meta"]["title"])
     axes[2].barh(y_pos - 0.16, limb_values, height=0.28, color=case_data[1]["meta"]["color"], label=case_data[1]["meta"]["title"])
     axes[2].set_yticks(y_pos, metric_names)
     axes[2].invert_yaxis()
-    axes[2].set_title("Final process metrics", fontsize=12.5, weight="bold")
+    axes[2].set_title("Final structural metrics", fontsize=12.5, weight="bold")
     axes[2].grid(axis="x", linestyle="--", alpha=0.3)
     axes[2].legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(0.0, -0.08))
     for idx, value in enumerate(drone_values):
@@ -271,12 +280,16 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
     fig.suptitle(f"{case_item['meta']['title']} output", fontsize=18, weight="bold")
 
     top_ax = axes[0]
-    heatmap = top_ax.imshow(
-        case_item["thickness_field"],
-        extent=(0.0, 1.0, 0.0, 1.0),
-        origin="lower",
-        cmap="magma",
-        interpolation="nearest",
+    mesh_u, mesh_v = case_item["fem_mesh_shape"]
+    node_u = case_item["fem_node_uv"][:, 0].reshape(mesh_v + 1, mesh_u + 1)
+    node_v = case_item["fem_node_uv"][:, 1].reshape(mesh_v + 1, mesh_u + 1)
+    displacement = case_item["fem_node_displacement_mm"].reshape(mesh_v + 1, mesh_u + 1)
+    heatmap = top_ax.pcolormesh(
+        node_u,
+        node_v,
+        displacement,
+        shading="auto",
+        cmap="viridis",
     )
     top_ax.plot(
         case_item["path_uv"][:, 0],
@@ -305,11 +318,11 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
                 edgecolor="#86efac",
             )
         )
-    top_ax.set_title("Route and deposited thickness field", fontsize=13.5, weight="bold", loc="left", pad=12)
+    top_ax.set_title("FEM displacement field", fontsize=13.5, weight="bold", loc="left", pad=12)
     top_ax.text(
         0.0,
         1.01,
-        "README-friendly reconstruction from the saved optimization output.",
+        "Solved in-plane displacement magnitude from the saved finite-element response.",
         transform=top_ax.transAxes,
         ha="left",
         va="bottom",
@@ -323,57 +336,75 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
     top_ax.set_aspect("equal", adjustable="box")
     top_ax.legend(loc="lower right", frameon=True, fontsize=9.5)
     top_ax.grid(False)
-    fig.colorbar(heatmap, ax=top_ax, fraction=0.046, pad=0.03, label="Relative thickness")
+    fig.colorbar(heatmap, ax=top_ax, fraction=0.046, pad=0.03, label="Displacement [mm]")
 
     middle_ax = axes[1]
-    middle_ax.plot(case_item["history_steps"], case_item["history_loss"], color="#fb6a4a", linewidth=2.2, label="Loss")
-    middle_ax.plot(case_item["history_steps"], case_item["history_steering"], color="#22d3ee", linewidth=1.8, label="Steering")
-    middle_ax.plot(case_item["history_steps"], case_item["history_thickness"], color="#facc15", linewidth=1.8, label="Thickness")
-    middle_ax.plot(case_item["history_steps"], case_item["history_keepout"], color="#84cc16", linewidth=1.8, label="Keep-out")
-    middle_ax.set_title("Optimization history", fontsize=13.5, weight="bold", loc="left", pad=12)
+    stress = middle_ax.scatter(
+        case_item["fem_element_centers_uv"][case_item["fem_active_elements"], 0],
+        case_item["fem_element_centers_uv"][case_item["fem_active_elements"], 1],
+        c=case_item["fem_von_mises_mpa"][case_item["fem_active_elements"]],
+        cmap="magma",
+        s=120,
+        marker="s",
+    )
+    middle_ax.plot(case_item["path_uv"][:, 0], case_item["path_uv"][:, 1], color="#dbeafe", linewidth=2.0)
+    for keep_out in case_item["optimized"]["surface"].get("keep_outs", []):
+        middle_ax.add_patch(
+            Circle(
+                keep_out["center_uv"],
+                keep_out["radius_uv"],
+                fill=False,
+                linewidth=2.0,
+                edgecolor="#86efac",
+            )
+        )
+    middle_ax.set_title("Element von Mises stress", fontsize=13.5, weight="bold", loc="left", pad=12)
     middle_ax.text(
         0.0,
         1.01,
-        "Objective and penalty evolution over solver steps.",
+        "Element-center stress reconstructed from the solved membrane response.",
         transform=middle_ax.transAxes,
         ha="left",
         va="bottom",
         fontsize=10.0,
         color="#4b5563",
     )
-    middle_ax.set_xlabel("Step")
-    middle_ax.set_ylabel("Objective / penalties")
-    middle_ax.grid(True, linestyle="--", alpha=0.28)
-    middle_ax.legend(loc="upper right", frameon=True, fontsize=9.5)
+    middle_ax.set_xlabel("u")
+    middle_ax.set_ylabel("v")
+    middle_ax.set_xlim(0.0, 1.0)
+    middle_ax.set_ylim(0.0, 1.0)
+    middle_ax.set_aspect("equal", adjustable="box")
+    fig.colorbar(stress, ax=middle_ax, fraction=0.046, pad=0.03, label="Stress [MPa]")
 
     bottom_ax = axes[2]
+    bottom_ax.plot(case_item["history_steps"], case_item["history_loss"], color="#fb6a4a", linewidth=2.2, label="Loss")
     bottom_ax.plot(
-        np.arange(case_item["radius_profile_mm"].shape[0]),
-        case_item["radius_profile_mm"],
-        color="#7dd3fc",
-        linewidth=2.2,
-        label="Local steering radius",
+        case_item["history_steps"],
+        case_item["history_compliance"],
+        color="#2563eb",
+        linewidth=1.9,
+        label="Normalized compliance",
     )
-    bottom_ax.axhline(
-        float(case_item["metrics"]["radius_limit_mm"]),
-        color="#fb923c",
-        linestyle="--",
-        linewidth=1.8,
-        label="Manufacturing limit",
+    bottom_ax.plot(
+        case_item["history_steps"],
+        case_item["history_displacement_mm"],
+        color="#10b981",
+        linewidth=1.9,
+        label="Max displacement [mm]",
     )
-    bottom_ax.set_title("Manufacturability check", fontsize=13.5, weight="bold", loc="left", pad=12)
+    bottom_ax.set_title("Optimization history", fontsize=13.5, weight="bold", loc="left", pad=12)
     bottom_ax.text(
         0.0,
         1.01,
-        "Local steering radius along the exported toolpath against the configured limit.",
+        "Objective, compliance, and displacement over solver steps.",
         transform=bottom_ax.transAxes,
         ha="left",
         va="bottom",
         fontsize=10.0,
         color="#4b5563",
     )
-    bottom_ax.set_xlabel("Path sample")
-    bottom_ax.set_ylabel("Radius [mm]")
+    bottom_ax.set_xlabel("Step")
+    bottom_ax.set_ylabel("Objective / response")
     bottom_ax.grid(True, linestyle="--", alpha=0.28)
     bottom_ax.legend(loc="upper right", frameon=True, fontsize=9.5)
 

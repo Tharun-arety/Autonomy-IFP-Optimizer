@@ -164,6 +164,35 @@ def surface_xyz(surface: SurfaceDefinition, uv: jnp.ndarray) -> jnp.ndarray:
     return jnp.stack([x, y, z], axis=-1)
 
 
+def surface_plane_coordinates(surface: SurfaceDefinition, uv: jnp.ndarray) -> jnp.ndarray:
+    u = uv[..., 0]
+    v = uv[..., 1]
+    if surface.kind == "cylinder":
+        radius = surface.params["radius_m"]
+        height = surface.params["height_m"]
+        s = 2.0 * jnp.pi * radius * (u - 0.5)
+        z = height * (v - 0.5)
+        return jnp.stack([s, z], axis=-1)
+
+    length = surface.params["length_m"]
+    width = surface.params["width_m"]
+    x = length * (u - 0.5)
+    y = width * (v - 0.5)
+    return jnp.stack([x, y], axis=-1)
+
+
+def load_direction_in_plane(surface: SurfaceDefinition, load_direction_xyz: tuple[float, float, float]) -> jnp.ndarray:
+    direction = _normalize(jnp.asarray(load_direction_xyz, dtype=jnp.float32))
+    if surface.kind == "cylinder":
+        circumferential = jnp.linalg.norm(direction[:2])
+        planar = jnp.asarray([circumferential, direction[2]], dtype=jnp.float32)
+    else:
+        planar = direction[:2]
+    norm = jnp.linalg.norm(planar)
+    fallback = jnp.asarray([1.0, 0.0], dtype=jnp.float32)
+    return jnp.where(norm > 1.0e-6, planar / norm, fallback)
+
+
 def surface_partials(surface: SurfaceDefinition, uv: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     u = uv[..., 0]
     v = uv[..., 1]
@@ -217,40 +246,6 @@ def surface_partials(surface: SurfaceDefinition, uv: jnp.ndarray) -> tuple[jnp.n
 def surface_normals(surface: SurfaceDefinition, uv: jnp.ndarray) -> jnp.ndarray:
     du, dv = surface_partials(surface, uv)
     return _normalize(jnp.cross(du, dv))
-
-
-def preferred_fiber_direction(
-    surface: SurfaceDefinition,
-    uv: jnp.ndarray,
-    load_direction_xyz: tuple[float, float, float],
-) -> jnp.ndarray:
-    load = _normalize(jnp.asarray(load_direction_xyz, dtype=jnp.float32))
-    normals = surface_normals(surface, uv)
-    tangential = load - jnp.sum(load * normals, axis=-1, keepdims=True) * normals
-    tangent_norm = jnp.linalg.norm(tangential, axis=-1, keepdims=True)
-    if surface.kind == "cylinder":
-        _, dv = surface_partials(surface, uv)
-        fallback = _normalize(dv)
-    else:
-        du, _ = surface_partials(surface, uv)
-        fallback = _normalize(du)
-    return jnp.where(tangent_norm > 1.0e-6, tangential / tangent_norm, fallback)
-
-
-def stress_weight(surface: SurfaceDefinition, uv: jnp.ndarray) -> jnp.ndarray:
-    if surface.kind == "cylinder":
-        axial = jnp.exp(-((uv[..., 1] - 0.5) ** 2) / (2.0 * 0.22**2))
-        circumferential = 0.15 * jnp.cos(2.0 * jnp.pi * uv[..., 0]) ** 2
-        return 0.85 + 0.75 * axial + circumferential
-
-    base = 0.65 + jnp.exp(-((uv[..., 1] - 0.5) ** 2) / (2.0 * 0.17**2))
-    if not surface.keep_outs:
-        return base
-    center = jnp.asarray(surface.keep_outs[0].center_uv)
-    radius = surface.keep_outs[0].radius_uv
-    dist = jnp.linalg.norm(uv - center, axis=-1)
-    ring = jnp.exp(-((dist - radius * 1.18) ** 2) / (2.0 * (radius * 0.32) ** 2))
-    return base + 1.6 * ring
 
 
 def keepout_signed_distance(surface: SurfaceDefinition, uv: jnp.ndarray) -> jnp.ndarray:

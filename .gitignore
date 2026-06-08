@@ -11,3 +11,9 @@ build/
 *.egg-info/
 outputs/*
 !outputs/.gitkeep
+!outputs/drone_frame_demo/
+!outputs/drone_frame_demo/**
+!outputs/robotic_limb_demo/
+!outputs/robotic_limb_demo/**
+!outputs/surrogate_smoke/
+!outputs/surrogate_smoke/**

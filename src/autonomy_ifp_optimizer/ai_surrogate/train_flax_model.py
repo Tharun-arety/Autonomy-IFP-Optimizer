@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..config import GeometryConfig, LoadCase, OptimizationConfig, SurrogateConfig
+from ..core.fem import prepare_membrane_fem_model
 from ..core.geometry import load_surface
 from ..core.physics import control_points_from_raw, evaluate_raw_design
 
@@ -22,6 +23,7 @@ def generate_dataset(
     optimization_config = optimization_config or OptimizationConfig()
     surface = load_surface(mesh=surface_name, surface=surface_name, geometry_config=GeometryConfig(surface=surface_name))
     load_case = LoadCase()
+    fem_model = prepare_membrane_fem_model(surface, load_case, optimization_config)
 
     key = jax.random.PRNGKey(config.seed)
     valid_count = int(config.samples * config.valid_fraction)
@@ -34,13 +36,13 @@ def generate_dataset(
     raw_params = jnp.concatenate([valid_raw, invalid_raw], axis=0)
 
     def feature_and_target(raw: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        design = evaluate_raw_design(raw, surface, load_case, optimization_config)
+        design = evaluate_raw_design(raw, surface, load_case, optimization_config, fem_model=fem_model)
         control_points, thickness_scale = control_points_from_raw(raw, surface, optimization_config)
         features = jnp.concatenate([control_points[1:3].reshape(-1), jnp.asarray([thickness_scale])], axis=0)
         targets = jnp.asarray(
             [
                 design["loss"],
-                design["compliance_proxy"],
+                design["normalized_compliance"],
                 design["steering_penalty"],
                 design["thickness_penalty"],
                 design["keepout_penalty"],
