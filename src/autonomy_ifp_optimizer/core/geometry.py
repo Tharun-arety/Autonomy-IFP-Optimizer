@@ -25,14 +25,17 @@ class SurfaceDefinition:
     start_uv: tuple[float, float]
     end_uv: tuple[float, float]
     keep_outs: tuple[KeepOutZone, ...] = ()
+    source_path: str | None = None
+    generation_mode: str = "procedural"
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "name": self.name,
             "kind": self.kind,
             "params": self.params,
             "start_uv": list(self.start_uv),
             "end_uv": list(self.end_uv),
+            "generation_mode": self.generation_mode,
             "keep_outs": [
                 {
                     "center_uv": list(zone.center_uv),
@@ -42,6 +45,9 @@ class SurfaceDefinition:
                 for zone in self.keep_outs
             ],
         }
+        if self.source_path is not None:
+            payload["source_path"] = self.source_path
+        return payload
 
 
 def _normalize(vector: jnp.ndarray, eps: float = 1.0e-8) -> jnp.ndarray:
@@ -49,7 +55,12 @@ def _normalize(vector: jnp.ndarray, eps: float = 1.0e-8) -> jnp.ndarray:
     return vector / jnp.maximum(norm, eps)
 
 
-def make_plate_with_hole(config: GeometryConfig | None = None, name: str = "drone_plate") -> SurfaceDefinition:
+def make_plate_with_hole(
+    config: GeometryConfig | None = None,
+    name: str = "drone_plate",
+    source_path: str | None = None,
+    generation_mode: str = "procedural",
+) -> SurfaceDefinition:
     config = config or GeometryConfig(surface="plate_with_hole")
     return SurfaceDefinition(
         name=name,
@@ -68,10 +79,17 @@ def make_plate_with_hole(config: GeometryConfig | None = None, name: str = "dron
                 label="central_cutout",
             ),
         ),
+        source_path=source_path,
+        generation_mode=generation_mode,
     )
 
 
-def make_cylinder(config: GeometryConfig | None = None, name: str = "robotic_limb") -> SurfaceDefinition:
+def make_cylinder(
+    config: GeometryConfig | None = None,
+    name: str = "robotic_limb",
+    source_path: str | None = None,
+    generation_mode: str = "procedural",
+) -> SurfaceDefinition:
     config = config or GeometryConfig(surface="cylinder")
     return SurfaceDefinition(
         name=name,
@@ -83,6 +101,8 @@ def make_cylinder(config: GeometryConfig | None = None, name: str = "robotic_lim
         start_uv=(0.08, 0.16),
         end_uv=(0.92, 0.84),
         keep_outs=(),
+        source_path=source_path,
+        generation_mode=generation_mode,
     )
 
 
@@ -100,6 +120,8 @@ def _infer_surface_from_mesh(mesh_path: Path, mesh: trimesh.Trimesh, config: Geo
                 cylinder_height_m=max(height, 0.2),
             ),
             name=mesh_path.stem,
+            source_path=str(mesh_path),
+            generation_mode="inferred_from_mesh",
         )
     return make_plate_with_hole(
         GeometryConfig(
@@ -111,6 +133,57 @@ def _infer_surface_from_mesh(mesh_path: Path, mesh: trimesh.Trimesh, config: Geo
             hole_radius_uv=config.hole_radius_uv,
         ),
         name=mesh_path.stem,
+        source_path=str(mesh_path),
+        generation_mode="inferred_from_mesh",
+    )
+
+
+def _infer_surface_from_gmsh_path(mesh_path: Path, config: GeometryConfig | None) -> SurfaceDefinition:
+    import gmsh
+
+    config = config or GeometryConfig()
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add(mesh_path.stem or "part")
+        suffix = mesh_path.suffix.lower()
+        if suffix in {".step", ".stp", ".iges", ".igs", ".brep"}:
+            gmsh.model.occ.importShapes(str(mesh_path))
+            gmsh.model.occ.synchronize()
+        else:
+            gmsh.merge(str(mesh_path))
+        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(-1, -1)
+    finally:
+        gmsh.finalize()
+
+    extents = np.asarray([xmax - xmin, ymax - ymin, zmax - zmin], dtype=np.float32)
+    stem = mesh_path.stem.lower()
+    if any(token in stem for token in ("tube", "limb", "cyl", "robot")):
+        radius = 0.25 * float(np.mean(sorted(extents[:2])))
+        height = float(extents[2] if extents[2] > 0 else config.cylinder_height_m)
+        return make_cylinder(
+            GeometryConfig(
+                surface="cylinder",
+                cylinder_radius_m=max(radius, 0.05),
+                cylinder_height_m=max(height, 0.2),
+            ),
+            name=mesh_path.stem,
+            source_path=str(mesh_path),
+            generation_mode="inferred_from_cad",
+        )
+
+    return make_plate_with_hole(
+        GeometryConfig(
+            surface="plate_with_hole",
+            length_m=float(extents[0] if extents[0] > 0 else config.length_m),
+            width_m=float(extents[1] if extents[1] > 0 else config.width_m),
+            crown_m=float(config.crown_m),
+            hole_center_uv=config.hole_center_uv,
+            hole_radius_uv=config.hole_radius_uv,
+        ),
+        name=mesh_path.stem,
+        source_path=str(mesh_path),
+        generation_mode="inferred_from_cad",
     )
 
 
@@ -129,6 +202,9 @@ def load_surface(
 
     mesh_path = Path(mesh)
     if mesh_path.exists():
+        suffix = mesh_path.suffix.lower()
+        if suffix in {".step", ".stp", ".iges", ".igs", ".brep"}:
+            return _infer_surface_from_gmsh_path(mesh_path, geometry_config)
         loaded = trimesh.load_mesh(mesh_path, process=False)
         if isinstance(loaded, trimesh.Scene):
             loaded = loaded.dump(concatenate=True)
@@ -179,6 +255,37 @@ def surface_plane_coordinates(surface: SurfaceDefinition, uv: jnp.ndarray) -> jn
     x = length * (u - 0.5)
     y = width * (v - 0.5)
     return jnp.stack([x, y], axis=-1)
+
+
+def surface_uv_from_plane(surface: SurfaceDefinition, plane_xy_m: jnp.ndarray) -> jnp.ndarray:
+    x = plane_xy_m[..., 0]
+    y = plane_xy_m[..., 1]
+    if surface.kind == "cylinder":
+        radius = surface.params["radius_m"]
+        height = surface.params["height_m"]
+        circumference = 2.0 * jnp.pi * radius
+        u = x / jnp.maximum(circumference, 1.0e-8) + 0.5
+        v = y / jnp.maximum(height, 1.0e-8) + 0.5
+        return jnp.stack([u, v], axis=-1)
+
+    length = surface.params["length_m"]
+    width = surface.params["width_m"]
+    u = x / jnp.maximum(length, 1.0e-8) + 0.5
+    v = y / jnp.maximum(width, 1.0e-8) + 0.5
+    return jnp.stack([u, v], axis=-1)
+
+
+def surface_plane_bounds(surface: SurfaceDefinition) -> tuple[float, float, float, float]:
+    if surface.kind == "cylinder":
+        radius = surface.params["radius_m"]
+        span_x = 2.0 * float(np.pi) * radius
+        span_y = surface.params["height_m"]
+    else:
+        span_x = surface.params["length_m"]
+        span_y = surface.params["width_m"]
+    half_x = 0.5 * span_x
+    half_y = 0.5 * span_y
+    return -half_x, half_x, -half_y, half_y
 
 
 def load_direction_in_plane(surface: SurfaceDefinition, load_direction_xyz: tuple[float, float, float]) -> jnp.ndarray:

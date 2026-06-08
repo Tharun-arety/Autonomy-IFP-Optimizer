@@ -1,6 +1,6 @@
 # Autonomy-IFP-Optimizer
 
-Autonomy-IFP-Optimizer is a differentiable path planner for Infinite Fiber Placement that couples one Bezier fiber course to an orthotropic membrane finite-element solve. Instead of scoring a path with an alignment heuristic, the structural term assembles element membrane stiffness matrices, solves for nodal displacements, and minimizes compliance `C = f^T u` inside the optimization loop. On the plate-with-hole demo, the saved run reduces FEM compliance from `0.1205 N*m` to `0.0934 N*m` (`-22.4%`) while moving the path from `-0.137 uv` cutout intrusion to `+0.169 uv` clearance and keeping the entire route above the `50 mm` steering-radius limit.
+Autonomy-IFP-Optimizer is a differentiable path planner for Infinite Fiber Placement that couples one Bezier fiber course to an orthotropic membrane finite-element solve on a conformal Gmsh shell mesh. Instead of scoring a path with an alignment heuristic, the structural term assembles triangle membrane stiffness matrices, solves for nodal displacements, and minimizes compliance `C = f^T u` inside the optimization loop. On the plate-with-hole demo, the saved run reduces FEM compliance from `0.1143 N*m` to `0.0839 N*m` (`-26.6%`) while moving the path from `-0.137 uv` cutout intrusion to `+0.070 uv` clearance and keeping the entire route above the `50 mm` steering-radius limit.
 
 The current implementation optimizes one fiber course at a time; multi-course cooperative routing is the next architectural step.
 
@@ -14,33 +14,35 @@ The repository ships two saved demonstration runs in `outputs/`. The tables belo
 
 | Metric | Baseline | Optimized | Change |
 | --- | ---: | ---: | ---: |
-| FEM compliance `f^T u` | 0.1205 N*m | 0.0934 N*m | -22.4% |
-| Normalized compliance | 0.939 | 0.729 | -22.4% |
-| Loaded-edge displacement | 0.240 mm | 0.186 mm | -22.5% |
-| Minimum steering radius | 711.1 mm | 185.0 mm | still +135.0 mm above limit |
-| Peak thickness field | 0.075 | 0.138 | below 1.20 limit |
-| Keep-out clearance | -0.137 uv | +0.169 uv | intrusion removed |
-| Estimated cycle time | 1.075 s | 1.218 s | +13.3% |
-| Estimated material usage | 0.439 g | 0.959 g | +118.7% |
+| FEM compliance `f^T u` | 0.1143 N*m | 0.0839 N*m | -26.6% |
+| Normalized compliance | 0.916 | 0.672 | -26.6% |
+| Loaded-edge displacement | 0.228 mm | 0.169 mm | -26.0% |
+| Peak von Mises stress | 6.36 MPa | 11.09 MPa | +74.4% |
+| Minimum steering radius | 711.1 mm | 106.2 mm | still +56.2 mm above limit |
+| Peak thickness field | 0.075 | 0.155 | below 1.20 limit |
+| Keep-out clearance | -0.137 uv | +0.070 uv | intrusion removed |
+| Estimated cycle time | 1.075 s | 1.176 s | +9.4% |
+| Estimated material usage | 0.439 g | 0.927 g | +111.4% |
 
 ### Robotic Limb Routing
 
 | Metric | Baseline | Optimized | Change |
 | --- | ---: | ---: | ---: |
-| FEM compliance `f^T u` | 0.1242 N*m | 0.1130 N*m | -9.0% |
-| Normalized compliance | 0.940 | 0.855 | -9.0% |
-| Loaded-edge displacement | 0.191 mm | 0.175 mm | -8.5% |
-| Minimum steering radius | 180.3 mm | 87.8 mm | still +37.8 mm above limit |
-| Peak thickness field | 0.066 | 0.131 | below 1.20 limit |
+| FEM compliance `f^T u` | 0.1241 N*m | 0.1105 N*m | -10.9% |
+| Normalized compliance | 0.938 | 0.835 | -10.9% |
+| Loaded-edge displacement | 0.191 mm | 0.171 mm | -10.4% |
+| Peak von Mises stress | 2.90 MPa | 4.86 MPa | +67.5% |
+| Minimum steering radius | 180.3 mm | 84.7 mm | still +34.7 mm above limit |
+| Peak thickness field | 0.066 | 0.134 | below 1.20 limit |
 | Keep-out clearance | n/a | n/a | no keep-out zone |
-| Estimated cycle time | 1.345 s | 1.486 s | +10.5% |
-| Estimated material usage | 0.549 g | 1.165 g | +112.3% |
+| Estimated cycle time | 1.345 s | 1.586 s | +17.9% |
+| Estimated material usage | 0.549 g | 1.245 g | +126.9% |
 
 The plate-with-hole case is the stronger structural demo because the optimizer reduces FEM compliance and clears the cutout without creating steering failures. The cylindrical case shows the same FEM loop working on an unwrapped curved surface with an axial load.
 
 ## Output
 
-The saved `outputs/*/ifp_preview.png` files now show FEM response, not a structural proxy. Each preview contains the solved in-plane displacement field, element von Mises stress, optimization history, and steering-radius compliance.
+The saved `outputs/*/ifp_preview.png` files now show the Gmsh triangle mesh and the solved FEM response, not a structural proxy. Each preview contains the in-plane displacement field, triangle von Mises stress, optimization history, and steering-radius compliance.
 
 ### Plate With Keep-Out
 
@@ -77,13 +79,13 @@ total_loss =
 
 ### Finite-Element Formulation
 
-The structural solve uses a structured bilinear Q4 membrane mesh on the surface parameterization (`12 x 8` by default). The plate-with-hole demo removes elements inside the keep-out so the cutout is part of the stiffness model rather than only a routing penalty. The cylinder is solved on its unwrapped `(s, z)` mid-surface.
+The structural solve uses a conformal first-order triangular membrane mesh generated with the Gmsh OpenCascade kernel. The plate-with-hole demo trims the cutout directly in the CAD kernel and refines the local mesh around the keep-out; the checked-in run uses `216` nodes and `364` `tri3` elements. The cylinder is solved on its unwrapped `(s, z)` mid-surface with a uniform Gmsh shell mesh; the checked-in run uses `271` nodes and `482` `tri3` elements.
 
 For each element:
 
 ```text
 A_e = t_matrix * Q_iso + t_fiber(u, v) * Qbar(theta)
-K_e = integral(B^T * A_e * B dA)
+K_e = area_e * B_e^T * A_e * B_e
 ```
 
 where:
@@ -91,9 +93,9 @@ where:
 - `Q_iso` is an isotropic plane-stress matrix for the baseline laminate,
 - `Qbar(theta)` is the rotated orthotropic ply constitutive matrix,
 - `t_fiber(u, v)` comes from a smooth tow-footprint field tied to the current path, and
-- `B` is the standard membrane strain-displacement matrix for the bilinear quad.
+- `B_e` is the constant membrane strain-displacement matrix for each `tri3` element.
 
-The global system is assembled and reduced to the free degrees of freedom:
+Boundary tractions are integrated over the loaded edge line elements, the opposite edge is clamped, and the global system is reduced to the free degrees of freedom:
 
 ```text
 K_ff * u_f = f_f
@@ -140,7 +142,7 @@ The checked-in smoke test in `outputs/surrogate_smoke/surrogate_metrics.json` re
 - epochs: `10`
 - validation normalized MSE: `1.859`
 - validation RMSE: `15.010`
-- surrogate inference latency: `9.64 ms`
+- surrogate inference latency: `11.41 ms`
 
 The intended workflow is to use the surrogate to screen many candidate courses quickly, then refine promising candidates with the full differentiable FEM objective.
 
@@ -149,7 +151,7 @@ The intended workflow is to use the surrogate to screen many candidate courses q
 Run the full optimization on the plate-with-hole demo:
 
 ```bash
-python main.py optimize --mesh examples/drone_plate.obj --load 500 --min-radius 50
+python main.py optimize --surface plate_with_hole --load 500 --min-radius 50
 ```
 
 Switch to the cylindrical demo:
@@ -170,7 +172,7 @@ Train the Flax surrogate on generated samples:
 python main.py train-surrogate --samples 1000 --epochs 250
 ```
 
-Note: the current mesh loader maps imported geometry onto one of two analytic surface families (plate-with-hole or cylinder) based on the part bounding box and filename. Arbitrary surface parameterization is not implemented yet.
+Note: Gmsh now generates the conformal FE mesh for the supported surface families. Passing a CAD or mesh file still uses the part bounds and filename to infer one of those supported families; arbitrary shell extraction from arbitrary CAD is not implemented yet.
 
 ## Python API
 
@@ -179,7 +181,7 @@ from autonomy_ifp_optimizer import GeometryConfig, LoadCase, OptimizationConfig,
 from autonomy_ifp_optimizer.export.toolpath import compute_metrics
 
 surface = load_surface(
-    mesh="examples/drone_plate.obj",
+    surface="plate_with_hole",
     geometry_config=GeometryConfig(surface="plate_with_hole"),
 )
 result = optimize_ifp_path(
@@ -229,7 +231,9 @@ python tools/generate_readme_assets.py
 ## Repository Components
 
 - `core/fem.py`
-  Builds the structured membrane mesh, assembles orthotropic element stiffness matrices, applies edge loads and constraints, and solves for nodal displacements.
+  Assembles orthotropic `tri3` membrane stiffness matrices, applies edge tractions and clamps, and solves for nodal displacements.
+- `core/meshing.py`
+  Builds the conformal Gmsh shell mesh for the supported surface families and extracts triangle connectivity and boundary line elements.
 - `core/physics.py`
   Couples the Bezier design variables to the FEM response and the manufacturing penalties inside one differentiable objective.
 - `core/constraints.py`
@@ -266,6 +270,7 @@ Autonomy-IFP-Optimizer/
       constraints.py
       fem.py
       geometry.py
+      meshing.py
       physics.py
     export/
       toolpath.py
@@ -282,7 +287,7 @@ Autonomy-IFP-Optimizer/
 This repository is materially stronger than the earlier heuristic model, but it is still a reduced-order structural planner rather than a production composite analysis stack.
 
 - The structural term is an orthotropic membrane FEM. It does not include bending stiffness, out-of-plane displacement, progressive damage, ply drop-off logic, or a full shell formulation.
-- The plate and cylinder demos use analytic surface families and structured meshes. Arbitrary CAD parameterization and imported shell meshes are not implemented.
+- The plate and cylinder demos use analytic surface families and Gmsh-generated conformal triangle meshes. Arbitrary CAD parameterization and imported shell extraction are not implemented.
 - The planner optimizes one Bezier course at a time. It does not do coverage planning, multi-course sequencing, seam management, or overlap scheduling.
 - The robot export provides local tool orientation from the optimized surface path, but it does not do joint-space planning, collision checking, or singularity avoidance.
 

@@ -9,6 +9,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.tri as mtri
 from matplotlib.patches import Circle, Rectangle
 
 
@@ -52,8 +53,8 @@ def _load_case(case: dict[str, str]) -> dict[str, object]:
         "path_uv": np.asarray(optimized["path_uv"], dtype=float),
         "control_points_uv": np.asarray(optimized["control_points_uv"], dtype=float),
         "radius_profile_mm": 1000.0 * np.asarray(optimized["radius_profile_m"], dtype=float),
-        "fem_mesh_shape": tuple(int(value) for value in optimized["fem"]["mesh_shape"]),
         "fem_node_uv": np.asarray(optimized["fem"]["node_uv"], dtype=float),
+        "fem_element_nodes": np.asarray(optimized["fem"]["element_nodes"], dtype=np.int32),
         "fem_node_displacement_mm": 1000.0 * np.asarray(optimized["fem"]["node_displacement_magnitude_m"], dtype=float),
         "fem_element_centers_uv": np.asarray(optimized["fem"]["element_centers_uv"], dtype=float),
         "fem_active_elements": np.asarray(optimized["fem"]["active_elements"], dtype=bool),
@@ -280,17 +281,14 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
     fig.suptitle(f"{case_item['meta']['title']} output", fontsize=18, weight="bold")
 
     top_ax = axes[0]
-    mesh_u, mesh_v = case_item["fem_mesh_shape"]
-    node_u = case_item["fem_node_uv"][:, 0].reshape(mesh_v + 1, mesh_u + 1)
-    node_v = case_item["fem_node_uv"][:, 1].reshape(mesh_v + 1, mesh_u + 1)
-    displacement = case_item["fem_node_displacement_mm"].reshape(mesh_v + 1, mesh_u + 1)
-    heatmap = top_ax.pcolormesh(
-        node_u,
-        node_v,
-        displacement,
-        shading="auto",
-        cmap="viridis",
+    triangulation = mtri.Triangulation(
+        case_item["fem_node_uv"][:, 0],
+        case_item["fem_node_uv"][:, 1],
+        case_item["fem_element_nodes"],
     )
+    triangulation.set_mask(~case_item["fem_active_elements"])
+    heatmap = top_ax.tripcolor(triangulation, case_item["fem_node_displacement_mm"], shading="gouraud", cmap="viridis")
+    top_ax.triplot(triangulation, color=(1.0, 1.0, 1.0, 0.18), linewidth=0.25)
     top_ax.plot(
         case_item["path_uv"][:, 0],
         case_item["path_uv"][:, 1],
@@ -339,14 +337,14 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
     fig.colorbar(heatmap, ax=top_ax, fraction=0.046, pad=0.03, label="Displacement [mm]")
 
     middle_ax = axes[1]
-    stress = middle_ax.scatter(
-        case_item["fem_element_centers_uv"][case_item["fem_active_elements"], 0],
-        case_item["fem_element_centers_uv"][case_item["fem_active_elements"], 1],
-        c=case_item["fem_von_mises_mpa"][case_item["fem_active_elements"]],
+    stress = middle_ax.tripcolor(
+        triangulation,
+        facecolors=case_item["fem_von_mises_mpa"],
+        shading="flat",
         cmap="magma",
-        s=120,
-        marker="s",
+        edgecolors="none",
     )
+    middle_ax.triplot(triangulation, color=(1.0, 1.0, 1.0, 0.10), linewidth=0.2)
     middle_ax.plot(case_item["path_uv"][:, 0], case_item["path_uv"][:, 1], color="#dbeafe", linewidth=2.0)
     for keep_out in case_item["optimized"]["surface"].get("keep_outs", []):
         middle_ax.add_patch(
@@ -358,11 +356,11 @@ def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> 
                 edgecolor="#86efac",
             )
         )
-    middle_ax.set_title("Element von Mises stress", fontsize=13.5, weight="bold", loc="left", pad=12)
+    middle_ax.set_title("Triangle von Mises stress", fontsize=13.5, weight="bold", loc="left", pad=12)
     middle_ax.text(
         0.0,
         1.01,
-        "Element-center stress reconstructed from the solved membrane response.",
+        "Triangle stress field reconstructed from the solved membrane response.",
         transform=middle_ax.transAxes,
         ha="left",
         va="bottom",

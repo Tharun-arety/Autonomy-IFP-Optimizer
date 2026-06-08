@@ -13,6 +13,7 @@ dependencies = [
     "jaxlib",
     "optax",
     "flax",
+    "gmsh",
     "numpy",
     "scipy",
     "trimesh",

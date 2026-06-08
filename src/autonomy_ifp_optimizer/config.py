@@ -26,8 +26,10 @@ class OptimizationConfig:
     learning_rate: float = 0.025
     num_path_samples: int = 160
     coverage_grid: int = 48
-    fem_elements_u: int = 12
-    fem_elements_v: int = 8
+    mesh_target_size_m: float = 0.045
+    mesh_refined_size_m: float = 0.018
+    mesh_refinement_distance_m: float = 0.080
+    mesh_algorithm: int = 6
     min_steering_radius_m: float = 0.05
     max_thickness: float = 1.20
     tow_half_width_uv: float = 0.028

@@ -19,16 +19,20 @@ def _parse_direction(text: str) -> tuple[float, float, float]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Differentiable IFP optimizer with orthotropic membrane FEM for autonomous composites workflows.")
+    parser = argparse.ArgumentParser(
+        description="Differentiable IFP optimizer with a Gmsh-generated orthotropic membrane FEM for autonomous composites workflows."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     optimize = subparsers.add_parser("optimize", help="Optimize a differentiable IFP path on a supported surface.")
-    optimize.add_argument("--mesh", default="examples/drone_plate.obj", help="Mesh path or surface alias.")
+    optimize.add_argument("--mesh", default=None, help="Optional CAD or mesh file used to infer a supported surface family.")
     optimize.add_argument("--surface", choices=["plate_with_hole", "cylinder"], default=None, help="Override procedural surface type.")
     optimize.add_argument("--load", type=float, default=500.0, help="Load magnitude in Newtons.")
     optimize.add_argument("--direction", type=_parse_direction, default=(1.0, 0.0, 0.0), help="Load direction as x,y,z.")
     optimize.add_argument("--min-radius", type=float, default=50.0, help="Minimum steering radius in millimetres.")
     optimize.add_argument("--max-thickness", type=float, default=1.2, help="Maximum allowable thickness field value.")
+    optimize.add_argument("--mesh-size-mm", type=float, default=45.0, help="Target in-plane element size for the Gmsh shell mesh.")
+    optimize.add_argument("--refined-mesh-size-mm", type=float, default=18.0, help="Refined element size near cutouts and keep-outs.")
     optimize.add_argument("--steps", type=int, default=350, help="Number of Adam optimization steps.")
     optimize.add_argument("--outdir", default="outputs", help="Directory for optimized artifacts.")
     optimize.add_argument("--format", choices=["json", "csv"], default="json", help="Kinematics export format.")
@@ -57,6 +61,8 @@ def _run_optimize(args: argparse.Namespace) -> int:
         steps=args.steps,
         min_steering_radius_m=args.min_radius / 1000.0,
         max_thickness=args.max_thickness,
+        mesh_target_size_m=args.mesh_size_mm / 1000.0,
+        mesh_refined_size_m=args.refined_mesh_size_mm / 1000.0,
     )
     result = optimize_ifp_path(surface, load_case=load_case, config=opt_config)
 

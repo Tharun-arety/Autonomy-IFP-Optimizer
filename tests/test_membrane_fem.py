@@ -13,6 +13,7 @@ if str(SRC) not in sys.path:
 
 from autonomy_ifp_optimizer import GeometryConfig, LoadCase, OptimizationConfig, load_surface
 from autonomy_ifp_optimizer.core.fem import prepare_membrane_fem_model
+from autonomy_ifp_optimizer.core.geometry import keepout_signed_distance
 from autonomy_ifp_optimizer.core.physics import evaluate_raw_design, initial_raw_params, optimize_ifp_path
 
 
@@ -31,6 +32,17 @@ def test_evaluate_raw_design_exposes_fem_response() -> None:
     assert float(fem["maximum_displacement_m"]) > 0.0
     assert np.asarray(fem["element_membrane_matrix_n_per_m"]).shape[-2:] == (3, 3)
     assert np.asarray(fem["node_displacement_xy_m"]).shape[-1] == 2
+    assert np.asarray(fem["element_nodes"]).shape[-1] == 3
+
+
+def test_plate_mesh_is_gmsh_trimmed_around_keepout() -> None:
+    surface = load_surface(surface="plate_with_hole", geometry_config=GeometryConfig(surface="plate_with_hole"))
+    fem_model = prepare_membrane_fem_model(surface, LoadCase(), OptimizationConfig(steps=1))
+
+    clearance = np.asarray(keepout_signed_distance(surface, fem_model.element_centers_uv), dtype=float)
+    assert float(np.min(clearance)) > 0.0
+    assert int(fem_model.mesh_element_count) > 100
+    assert int(fem_model.mesh_node_count) > 60
 
 
 def test_plate_optimizer_reduces_fem_compliance_and_clears_keepout() -> None:

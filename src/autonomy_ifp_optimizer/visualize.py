@@ -9,14 +9,17 @@ import numpy as np
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
 
 
-def _mesh_grids(fem: dict[str, object]) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
-    mesh_u, mesh_v = [int(value) for value in fem["mesh_shape"]]
+def _uv_triangulation(fem: dict[str, object]) -> tuple[np.ndarray, mtri.Triangulation]:
     node_uv = np.asarray(fem["node_uv"], dtype=float)
-    u_grid = node_uv[:, 0].reshape(mesh_v + 1, mesh_u + 1)
-    v_grid = node_uv[:, 1].reshape(mesh_v + 1, mesh_u + 1)
-    return u_grid, v_grid, (mesh_u, mesh_v)
+    element_nodes = np.asarray(fem["element_nodes"], dtype=np.int32)
+    triangulation = mtri.Triangulation(node_uv[:, 0], node_uv[:, 1], element_nodes)
+    active_elements = np.asarray(fem["active_elements"], dtype=bool)
+    if active_elements.shape[0] == element_nodes.shape[0]:
+        triangulation.set_mask(~active_elements)
+    return node_uv, triangulation
 
 
 def save_preview(result: dict[str, object], output_dir: str | Path) -> Path:
@@ -28,16 +31,15 @@ def save_preview(result: dict[str, object], output_dir: str | Path) -> Path:
     fem = result["fem"]
     radius_profile_mm = 1000.0 * np.asarray(result["radius_profile_m"], dtype=float)
     radius_limit_mm = float(result["metrics"]["radius_limit_mm"])
-    element_centers = np.asarray(fem["element_centers_uv"], dtype=float)
-    active_elements = np.asarray(fem["active_elements"], dtype=bool)
     von_mises_mpa = 1.0e-6 * np.asarray(fem["element_von_mises_pa"], dtype=float)
+    displacement_mm = 1000.0 * np.asarray(fem["node_displacement_magnitude_m"], dtype=float)
 
-    u_grid, v_grid, (mesh_u, mesh_v) = _mesh_grids(fem)
-    displacement_mm = 1000.0 * np.asarray(fem["node_displacement_magnitude_m"], dtype=float).reshape(mesh_v + 1, mesh_u + 1)
+    _, triangulation = _uv_triangulation(fem)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    fig, axes = plt.subplots(2, 2, figsize=(14.5, 9.2))
 
-    displacement_plot = axes[0, 0].pcolormesh(u_grid, v_grid, displacement_mm, shading="auto", cmap="viridis")
+    displacement_plot = axes[0, 0].tripcolor(triangulation, displacement_mm, shading="gouraud", cmap="viridis")
+    axes[0, 0].triplot(triangulation, color=(1.0, 1.0, 1.0, 0.18), linewidth=0.25)
     axes[0, 0].plot(path_uv[:, 0], path_uv[:, 1], color="#f8fafc", linewidth=2.2, label="Optimized path")
     for zone in result["surface"].get("keep_outs", []):
         circle = plt.Circle(zone["center_uv"], zone["radius_uv"], color="#86efac", fill=False, linewidth=2.0)
@@ -48,19 +50,19 @@ def save_preview(result: dict[str, object], output_dir: str | Path) -> Path:
     axes[0, 0].legend(loc="lower right")
     fig.colorbar(displacement_plot, ax=axes[0, 0], fraction=0.046, pad=0.04, label="mm")
 
-    stress_plot = axes[0, 1].scatter(
-        element_centers[active_elements, 0],
-        element_centers[active_elements, 1],
-        c=von_mises_mpa[active_elements],
+    stress_plot = axes[0, 1].tripcolor(
+        triangulation,
+        facecolors=von_mises_mpa,
+        shading="flat",
         cmap="magma",
-        s=130,
-        marker="s",
+        edgecolors="none",
     )
+    axes[0, 1].triplot(triangulation, color=(1.0, 1.0, 1.0, 0.10), linewidth=0.2)
     axes[0, 1].plot(path_uv[:, 0], path_uv[:, 1], color="#dbeafe", linewidth=2.0)
     for zone in result["surface"].get("keep_outs", []):
         circle = plt.Circle(zone["center_uv"], zone["radius_uv"], color="#86efac", fill=False, linewidth=2.0)
         axes[0, 1].add_patch(circle)
-    axes[0, 1].set_title("Element von Mises stress")
+    axes[0, 1].set_title("Triangle von Mises stress")
     axes[0, 1].set_xlabel("u")
     axes[0, 1].set_ylabel("v")
     fig.colorbar(stress_plot, ax=axes[0, 1], fraction=0.046, pad=0.04, label="MPa")
@@ -94,9 +96,10 @@ def save_preview(result: dict[str, object], output_dir: str | Path) -> Path:
     axes[1, 1].set_ylabel("Radius [mm]")
     axes[1, 1].legend(loc="upper right")
 
-    for ax in axes.flat:
-        ax.set_xlim(0.0, 1.0) if ax in (axes[0, 0], axes[0, 1]) else None
-        ax.set_ylim(0.0, 1.0) if ax in (axes[0, 0], axes[0, 1]) else None
+    for ax in axes.flat[:2]:
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_aspect("equal", adjustable="box")
 
     fig.tight_layout()
     output_path = output_dir / "ifp_preview.png"

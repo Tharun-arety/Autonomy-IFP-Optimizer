@@ -281,7 +281,14 @@ def optimize_ifp_path(
         "maximum_von_mises_pa": float(jnp.max(fem["element_von_mises_pa"])),
         "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
         "solver_residual_norm": float(fem["solver_residual_norm"]),
-        "finite_element_mesh": [config.fem_elements_u, config.fem_elements_v],
+        "finite_element_mesh": {
+            "generator": "gmsh",
+            "element_type": "tri3",
+            "nodes": int(fem["mesh_node_count"]),
+            "elements": int(fem["mesh_element_count"]),
+            "target_size_mm": 1000.0 * config.mesh_target_size_m,
+            "refined_size_mm": 1000.0 * config.mesh_refined_size_m,
+        },
     }
     metrics["manufacturable"] = bool(
         metrics["min_steering_radius_m"] >= config.min_steering_radius_m
