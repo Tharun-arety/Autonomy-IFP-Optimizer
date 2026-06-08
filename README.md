@@ -36,15 +36,15 @@ The important pattern is visible in both demos: the optimizer reduces the compli
 
 ## Output
 
-The figures below are the exact saved `ifp_preview.png` artifacts written by the optimizer.
+The raw `outputs/*/ifp_preview.png` files are wide three-panel diagnostics. GitHub compresses those figures hard enough that the labels become difficult to read, so the README shows stacked reconstructions generated from the saved run data below. Click either image to open the original full-resolution export.
 
 ### Plate With Keep-Out
 
-![Plate-with-hole output preview](outputs/drone_frame_demo/ifp_preview.png)
+[![Plate-with-hole output preview](assets/drone_frame_output_breakdown.png)](outputs/drone_frame_demo/ifp_preview.png)
 
 ### Cylindrical Routing
 
-![Cylindrical output preview](outputs/robotic_limb_demo/ifp_preview.png)
+[![Cylindrical output preview](assets/robotic_limb_output_breakdown.png)](outputs/robotic_limb_demo/ifp_preview.png)
 
 The plots show the path on the surface, the optimization history, and the steering-radius manufacturability check. The preview image is the quickest way to see whether the code produced a route a process engineer would actually inspect further.
 
@@ -220,8 +220,10 @@ python tools/generate_readme_assets.py
 Autonomy-IFP-Optimizer/
   assets/
     demo_showcase.png
+    drone_frame_output_breakdown.png
     toolpath_diagnostics.png
     optimization_profiles.png
+    robotic_limb_output_breakdown.png
   examples/
     drone_frame_cutout_avoidance.ipynb
     robotic_limb_optimization.ipynb

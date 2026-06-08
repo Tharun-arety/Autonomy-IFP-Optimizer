@@ -48,11 +48,15 @@ def _load_case(case: dict[str, str]) -> dict[str, object]:
         "metrics": metrics,
         "optimized": optimized,
         "preview": preview,
+        "thickness_field": np.asarray(optimized["thickness_field"], dtype=float),
         "path_uv": np.asarray(optimized["path_uv"], dtype=float),
         "control_points_uv": np.asarray(optimized["control_points_uv"], dtype=float),
         "radius_profile_mm": 1000.0 * np.asarray(optimized["radius_profile_m"], dtype=float),
         "history_steps": np.asarray([point["step"] for point in history], dtype=float),
         "history_loss": np.asarray([point["loss"] for point in history], dtype=float),
+        "history_steering": np.asarray([point["steering_penalty"] for point in history], dtype=float),
+        "history_thickness": np.asarray([point["thickness_penalty"] for point in history], dtype=float),
+        "history_keepout": np.asarray([point["keepout_penalty"] for point in history], dtype=float),
         "history_radius_mm": 1000.0 * np.asarray([point["min_steering_radius_m"] for point in history], dtype=float),
         "history_peak_thickness": np.asarray([point["peak_thickness"] for point in history], dtype=float),
         "objective_drop_pct": objective_drop_pct,
@@ -262,12 +266,129 @@ def create_optimization_profiles(case_data: list[dict[str, object]], output_path
     plt.close(fig)
 
 
+def create_output_breakdown(case_item: dict[str, object], output_path: Path) -> None:
+    fig, axes = plt.subplots(3, 1, figsize=(8.8, 12.0), layout="constrained", height_ratios=[1.15, 1.0, 1.0])
+    fig.suptitle(f"{case_item['meta']['title']} output", fontsize=18, weight="bold")
+
+    top_ax = axes[0]
+    heatmap = top_ax.imshow(
+        case_item["thickness_field"],
+        extent=(0.0, 1.0, 0.0, 1.0),
+        origin="lower",
+        cmap="magma",
+        interpolation="nearest",
+    )
+    top_ax.plot(
+        case_item["path_uv"][:, 0],
+        case_item["path_uv"][:, 1],
+        color="#f8fafc",
+        linewidth=2.4,
+        label="Optimized path",
+    )
+    top_ax.plot(
+        case_item["control_points_uv"][:, 0],
+        case_item["control_points_uv"][:, 1],
+        linestyle="--",
+        color="#7dd3fc",
+        linewidth=1.5,
+        marker="o",
+        markersize=4.5,
+        label="Control polygon",
+    )
+    for keep_out in case_item["optimized"]["surface"].get("keep_outs", []):
+        top_ax.add_patch(
+            Circle(
+                keep_out["center_uv"],
+                keep_out["radius_uv"],
+                fill=False,
+                linewidth=2.0,
+                edgecolor="#86efac",
+            )
+        )
+    top_ax.set_title("Route and deposited thickness field", fontsize=13.5, weight="bold", loc="left", pad=12)
+    top_ax.text(
+        0.0,
+        1.01,
+        "README-friendly reconstruction from the saved optimization output.",
+        transform=top_ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10.0,
+        color="#4b5563",
+    )
+    top_ax.set_xlabel("u")
+    top_ax.set_ylabel("v")
+    top_ax.set_xlim(0.0, 1.0)
+    top_ax.set_ylim(0.0, 1.0)
+    top_ax.set_aspect("equal", adjustable="box")
+    top_ax.legend(loc="lower right", frameon=True, fontsize=9.5)
+    top_ax.grid(False)
+    fig.colorbar(heatmap, ax=top_ax, fraction=0.046, pad=0.03, label="Relative thickness")
+
+    middle_ax = axes[1]
+    middle_ax.plot(case_item["history_steps"], case_item["history_loss"], color="#fb6a4a", linewidth=2.2, label="Loss")
+    middle_ax.plot(case_item["history_steps"], case_item["history_steering"], color="#22d3ee", linewidth=1.8, label="Steering")
+    middle_ax.plot(case_item["history_steps"], case_item["history_thickness"], color="#facc15", linewidth=1.8, label="Thickness")
+    middle_ax.plot(case_item["history_steps"], case_item["history_keepout"], color="#84cc16", linewidth=1.8, label="Keep-out")
+    middle_ax.set_title("Optimization history", fontsize=13.5, weight="bold", loc="left", pad=12)
+    middle_ax.text(
+        0.0,
+        1.01,
+        "Objective and penalty evolution over solver steps.",
+        transform=middle_ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10.0,
+        color="#4b5563",
+    )
+    middle_ax.set_xlabel("Step")
+    middle_ax.set_ylabel("Objective / penalties")
+    middle_ax.grid(True, linestyle="--", alpha=0.28)
+    middle_ax.legend(loc="upper right", frameon=True, fontsize=9.5)
+
+    bottom_ax = axes[2]
+    bottom_ax.plot(
+        np.arange(case_item["radius_profile_mm"].shape[0]),
+        case_item["radius_profile_mm"],
+        color="#7dd3fc",
+        linewidth=2.2,
+        label="Local steering radius",
+    )
+    bottom_ax.axhline(
+        float(case_item["metrics"]["radius_limit_mm"]),
+        color="#fb923c",
+        linestyle="--",
+        linewidth=1.8,
+        label="Manufacturing limit",
+    )
+    bottom_ax.set_title("Manufacturability check", fontsize=13.5, weight="bold", loc="left", pad=12)
+    bottom_ax.text(
+        0.0,
+        1.01,
+        "Local steering radius along the exported toolpath against the configured limit.",
+        transform=bottom_ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10.0,
+        color="#4b5563",
+    )
+    bottom_ax.set_xlabel("Path sample")
+    bottom_ax.set_ylabel("Radius [mm]")
+    bottom_ax.grid(True, linestyle="--", alpha=0.28)
+    bottom_ax.legend(loc="upper right", frameon=True, fontsize=9.5)
+
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     case_data = [_load_case(case) for case in CASES]
     create_showcase_overview(case_data, ASSETS_DIR / "demo_showcase.png")
     create_toolpath_diagnostics(case_data, ASSETS_DIR / "toolpath_diagnostics.png")
     create_optimization_profiles(case_data, ASSETS_DIR / "optimization_profiles.png")
+    create_output_breakdown(case_data[0], ASSETS_DIR / "drone_frame_output_breakdown.png")
+    create_output_breakdown(case_data[1], ASSETS_DIR / "robotic_limb_output_breakdown.png")
 
 
 if __name__ == "__main__":
