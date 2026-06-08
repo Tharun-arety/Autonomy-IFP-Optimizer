@@ -1,75 +1,79 @@
 # Autonomy-IFP-Optimizer
 
-Autonomy-IFP-Optimizer is a differentiable path-planning engine for Infinite Fiber Placement (IFP) robotics.
+Autonomy-IFP-Optimizer is a differentiable path-planning package for Infinite Fiber Placement (IFP) robotics. It optimizes robot-ready fiber routes while structural alignment, steering-radius limits, thickness buildup, and keep-out geometry all remain inside the same JAX optimization loop.
 
-Traditional composite CAM workflows rely on forward-engineering loops: define a path, evaluate it, adjust parameters, and repeat. This project uses JAX-based automatic differentiation to optimize fiber paths directly against structural proxies and manufacturing constraints such as minimum steering radius, thickness buildup, and keep-out zones. The repository also includes data-generation and surrogate-model training utilities for learned approximations of the same physics pipeline.
+![Validated workflow showcase](assets/demo_showcase.png)
 
-## Highlights
+## What The Package Does
 
-- Differentiable path optimization on analytic surface families
-- Manufacturing-aware objectives with steering, thickness, boundary, and keep-out penalties
-- Robot-oriented toolpath export with kinematic records and process metrics
-- Flax surrogate training on physics-generated samples
+The optimizer jointly solves for:
 
-## Repository Components
+- Bezier control points on supported analytic IFP surfaces
+- continuous deposition / thickness scaling
+- structural alignment with the target load direction
+- local steering-radius compliance
+- thickness smoothness across the laydown field
+- keep-out avoidance around holes and cutouts
+- export-ready path samples, normals, tangents, and process metrics
 
-This repository is organized around four main components:
+The repository includes two saved end-to-end demonstration results:
 
-- `core/geometry.py`
-  Defines the analytic surface models used by the demos, including a plate-with-hole surface and a cylinder. Imported meshes are mapped onto these surface families so the optimization remains stable and differentiable.
-- `core/physics.py` and `core/constraints.py`
-  Optimize cubic Bezier IFP paths with JAX auto-differentiation. The objective combines a structural stiffness proxy with manufacturing penalties for curvature, thickness buildup, boundary escape, and cutout intrusion.
-- `export/toolpath.py`
-  Converts optimized paths into robot-ready kinematic records: XYZ points, surface normals, tangents, binormals, arc length, and local steering radius. It also computes cycle-time and material estimates.
-- `ai_surrogate/train_flax_model.py`
-  Generates physics-labeled path samples and trains a Flax MLP surrogate to approximate loss and manufacturability terms at inference speed.
+- `drone_frame_demo`
+  A plate-with-hole case where the route bends around a central cutout while staying well above the steering-radius limit.
+- `robotic_limb_demo`
+  A cylindrical routing case that converges to a manufacturable layup on a limb-like surface.
 
-## Optimization Model
+## Result Snapshot
 
-The optimizer solves for:
+These values come directly from the checked-in output artifacts in `outputs/`.
 
-- Two internal Bezier control points in surface parameter space
-- A continuous deposition and thickness scale
+| Demo | Surface | Objective | Path length (m) | Min steering radius (mm) | Cycle time (s) | Material (g) | Manufacturable |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Drone frame cutout avoidance | Plate with keep-out | 0.425 | 0.561 | 313.19 | 1.122 | 0.859 | Yes |
+| Robotic limb routing | Cylinder | 0.656 | 0.672 | 177.68 | 1.345 | 1.008 | Yes |
 
-The loss combines:
+The plate-with-hole run also keeps a positive keep-out clearance of `0.040 uv`, and both demos remain comfortably above the manufacturing steering limit of `50 mm`.
 
-- `compliance_proxy`
-  A stiffness-oriented proxy that rewards alignment of the path tangent with the local preferred load direction and stress concentration field.
-- `steering_penalty`
-  An exponential penalty when the local steering radius drops below the minimum IFP limit. The CLI default is `50 mm`.
-- `thickness_penalty`
-  A differentiable deposition-density map across the surface that penalizes unstable buildup and non-uniform laydown.
-- `keepout_penalty`
-  Smoothly discourages paths from entering holes and integrated cutouts.
-- `boundary_penalty` and `smoothness_penalty`
-  Keep the route on the valid surface and prevent erratic control polygons.
+## What The Toolpath Looks Like
 
-Manufacturability is part of the optimization state rather than a post-processing check.
+![Toolpath diagnostics](assets/toolpath_diagnostics.png)
 
-## CLI Workflow
+The left and center panels show the optimized UV-space route for each case, including the control polygon behind the differentiable Bezier path. The right panel shows the local steering radius along the exported toolpath. In both workflows, every sampled point stays above the manufacturing limit.
 
-Run the full differentiable optimization on the demo plate:
+## How The Optimization Converges
+
+![Optimization profiles](assets/optimization_profiles.png)
+
+The drone-frame case drops from an initial loss of `1.690` to `0.425` (`-74.8%`), while the robotic-limb case drops from `1.274` to `0.656` (`-48.5%`). The steering-radius history shows the plate-with-hole case tightening near the cutout before relaxing back into a robust manufacturable solution.
+
+## Minimal API
+
+```python
+from autonomy_ifp_optimizer import GeometryConfig, LoadCase, OptimizationConfig, load_surface, optimize_ifp_path
+from autonomy_ifp_optimizer.export.toolpath import compute_metrics
+
+surface = load_surface(
+    mesh="examples/drone_plate.obj",
+    geometry_config=GeometryConfig(surface="plate_with_hole"),
+)
+result = optimize_ifp_path(
+    surface,
+    load_case=LoadCase(magnitude_n=500.0, direction_xyz=(1.0, 0.0, 0.0)),
+    config=OptimizationConfig(),
+)
+metrics = compute_metrics(result)
+
+print(metrics["objective"])
+print(metrics["min_steering_radius_mm"])
+print(metrics["estimated_cycle_time_s"])
+```
+
+Use the CLI when you want complete output bundles written to disk:
 
 ```bash
 python main.py optimize --mesh examples/drone_plate.obj --load 500 --min-radius 50
-```
-
-Export the optimized path to robot-facing kinematics:
-
-```bash
 python main.py export --input outputs/optimized_path.json --format json
-```
-
-Train the Flax surrogate model on physics-generated IFP samples:
-
-```bash
 python main.py train-surrogate --samples 1000 --epochs 250
-```
-
-Switch to a tubular demonstration surface:
-
-```bash
-python main.py optimize --surface cylinder --load 650 --direction 0,0,1
 ```
 
 ## Generated Artifacts
@@ -77,13 +81,13 @@ python main.py optimize --surface cylinder --load 650 --direction 0,0,1
 After `optimize`, the repository writes:
 
 - `outputs/optimized_path.json`
-  Full optimization result including control points, sampled path, normals, objective terms, and metrics
+  Full optimization result including control points, sampled path, history, and objective terms
 - `outputs/metrics.json`
-  Manufacturability and process metrics including steering radius, estimated cycle time, and material estimate
+  Manufacturability and process metrics including steering radius, cycle time, and material estimate
 - `outputs/ifp_kinematics.json` or `outputs/ifp_kinematics.csv`
-  Robot-consumable kinematic array with XYZ positions plus tool-orientation vectors
+  Robot-consumable kinematic arrays with XYZ positions and local frame vectors
 - `outputs/ifp_preview.png`
-  Preview showing the optimized path, thickness field, and steering-radius compliance
+  Preview figure with thickness map, optimization history, and manufacturability check
 
 After `train-surrogate`, the repository writes:
 
@@ -91,34 +95,28 @@ After `train-surrogate`, the repository writes:
 - `outputs/surrogate_params.msgpack`
 - `outputs/surrogate_metrics.json`
 
-## Example Notebooks
+To regenerate the README figures from the saved demo outputs:
 
-- `examples/drone_frame_cutout_avoidance.ipynb`
-  Plate-with-hole workflow from geometry inspection through optimization, toolpath export, and process metrics.
-- `examples/robotic_limb_optimization.ipynb`
-  Cylindrical workflow from limb geometry through optimized routing, robotic kinematics export, and manufacturing metrics.
-- `examples/drone_plate.obj`
-  Lightweight mesh asset used by the cutout-avoidance demo.
-
-## Scope and Limitations
-
-This repository is a technical prototype, not a production planning system. The current implementation is intentionally scoped around analytic surfaces that keep the optimization differentiable and stable:
-
-- 2.5D plate-with-hole parts for cutout-routing demonstrations
-- Cylindrical parts for tubular IFP routing
-- Single-path optimization with continuous deposition scaling
-
-This scope is deliberate: it validates the core architecture before scaling into richer imported geometries, multi-course planning, collision-aware robot kinematics, and tighter manufacturing-software integration.
+```bash
+python tools/generate_readme_assets.py
+```
 
 ## Repository Layout
 
 ```text
 Autonomy-IFP-Optimizer/
+  assets/
+    demo_showcase.png
+    toolpath_diagnostics.png
+    optimization_profiles.png
   examples/
     drone_frame_cutout_avoidance.ipynb
     robotic_limb_optimization.ipynb
     drone_plate.obj
   outputs/
+    drone_frame_demo/
+    robotic_limb_demo/
+    surrogate_smoke/
   src/autonomy_ifp_optimizer/
     ai_surrogate/
       train_flax_model.py
@@ -131,12 +129,17 @@ Autonomy-IFP-Optimizer/
     cli.py
     config.py
     visualize.py
+  tools/
+    generate_readme_assets.py
   main.py
 ```
 
-## Roadmap
+## Scope
 
-- Replace the current stiffness proxy with a differentiable shell or reduced-order laminate response.
-- Extend from one Bezier course to multi-course cooperative routing.
-- Add robot singularity and head-clearance constraints alongside the current surface-normal export.
-- Feed surrogate uncertainty back into the optimization loop for active learning.
+This is a technical prototype, not a production planning backend. The current implementation is intentionally scoped around analytic surfaces that keep the optimization differentiable and stable:
+
+- 2.5D plate-with-hole parts for cutout-routing demonstrations
+- cylindrical parts for tubular IFP routing
+- single-path optimization with continuous deposition scaling
+
+That scope is deliberate. It validates the planning architecture before scaling into richer imported geometries, multi-course planning, collision-aware robot kinematics, and tighter manufacturing-software integration.
