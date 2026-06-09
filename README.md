@@ -2,13 +2,13 @@
 
 Autonomy-IFP-Optimizer is a differentiable Infinite Fiber Placement route planner. It optimizes one cubic Bezier course and one thickness scale directly against an orthotropic membrane FEM, steering-radius limits, thickness buildup, keep-out zones, boundary limits, and control-polygon smoothness.
 
-The repository now ships the visual proof with the solver: a saved optimization-evolution GIF, a paired-case showcase figure, a baseline-vs-optimized route comparison, optimization-profile plots, persisted surrogate-validation data, and interactive Plotly HTML exports for the checked-in demo runs.
+The repository includes generated visual assets and checked-in demo outputs: an optimization-evolution GIF, a paired-case showcase figure, a baseline-vs-optimized route comparison, optimization-profile plots, persisted surrogate-validation data, and interactive Plotly HTML exports.
 
 ![Optimization evolution](assets/optimization_evolution.gif)
 
-The hero GIF above is generated from the saved `frames` snapshots in `optimized_path.json`. It shows how the route, Bezier control polygon, and convergence curves evolve together during the optimizer run.
+The GIF above is generated from the saved `frames` snapshots in `optimized_path.json`. It shows how the route, Bezier control polygon, and convergence curves evolve during the optimizer run.
 
-## What It Solves
+## What It Does
 
 - Re-route a single IFP course around keep-outs while improving structural stiffness against a real membrane FEM, not a heuristic alignment score.
 - Keep steering radius, thickness buildup, boundary limits, and keep-out clearance inside the same differentiable objective.
@@ -16,15 +16,15 @@ The hero GIF above is generated from the saved `frames` snapshots in `optimized_
 - Persist an interactive 3D HTML view so the surface mesh, final route, and local tool frame can be inspected directly.
 - Train a Flax surrogate on FEM-labeled samples and save validation predictions for README-quality error plots.
 
-Current scope is deliberate: this repo optimizes one course at a time and exports local tool frames. It does not solve robot joint-space IK, collision checking, or singularity avoidance yet.
+The current scope is one course at a time with local tool-frame export. It does not solve robot joint-space IK, collision checking, or singularity avoidance yet.
 
-## Visual Proof
+## Example Output
 
 ![Naive vs optimized route tradeoff](assets/naive_vs_optimized_heatmap.png)
 
-The plate-with-hole demo is the clearest saved example. The optimized path removes a `-0.137 uv` cutout intrusion, improves normalized compliance from `0.916` to `0.672`, and still stays above the `50 mm` steering-radius limit. It does that by accepting a more demanding turn near the keep-out, so the route-effort proxy rises from `0.31` to `0.35`. The figure is labeled that way on purpose: it is showing a real trade, not pretending the optimized route is universally easier.
+The plate-with-hole demo is the main reference example in the repository. The optimized path removes a `-0.137 uv` cutout intrusion, improves normalized compliance from `0.916` to `0.672`, and still stays above the `50 mm` steering-radius limit. It does that by accepting a more demanding turn near the keep-out, so the route-effort proxy rises from `0.31` to `0.35`. The figure is intended to show that trade-off directly.
 
-The route-effort colormap is a robot-facing proxy built from steering-radius margin, tool-axis rotation rate, heading change, and keep-out margin. That is the strongest honest metric the current repo can support before a full IK layer exists.
+The route-effort colormap is a robot-facing proxy built from steering-radius margin, tool-axis rotation rate, heading change, and keep-out margin. The repository uses that proxy because it does not include a full IK layer yet.
 
 ## Saved Demo Results
 
@@ -43,7 +43,7 @@ The repository includes two saved runs in `outputs/` with a baseline seed path a
 | Estimated cycle time | 1.075 s | 1.176 s | +9.4% |
 | Estimated material usage | 0.439 g | 0.927 g | +111.4% |
 
-This is the best saved proof case in the repo right now: the route clears the hole, improves stiffness materially, and stays manufacturable against the configured steering limit.
+This is the most representative checked-in example: the route clears the hole, improves stiffness, and stays manufacturable against the configured steering limit.
 
 ### Robotic Limb Routing
 
@@ -57,17 +57,17 @@ This is the best saved proof case in the repo right now: the route clears the ho
 | Estimated cycle time | 1.345 s | 1.586 s | +17.9% |
 | Estimated material usage | 0.549 g | 1.245 g | +126.9% |
 
-The cylinder case proves the same differentiable loop runs on curved geometry and improves stiffness there too. It is not the cleanest manufacturing trade yet, which is why the README leads with the plate-with-hole case.
+The cylinder case shows that the same differentiable loop also runs on curved geometry and improves stiffness there. It is a less balanced manufacturing trade than the plate-with-hole case, which is why the README leads with the plate example.
 
 ![Saved demo showcase](assets/demo_showcase.png)
 
-The showcase figure above puts both checked-in demos side by side with the exact metrics exported in `outputs/*/metrics.json`. The cylinder demo has no keep-out zones, so the visual summary now renders that field as `n/a` instead of leaking the internal sentinel value used by the solver.
+The showcase figure above places both checked-in demos side by side with the metrics exported in `outputs/*/metrics.json`. The cylinder demo has no keep-out zones, so the summary renders that field as `n/a`.
 
 ## Optimization Profiles
 
 ![Optimization profiles](assets/optimization_profiles.png)
 
-The profile plot makes the optimization behavior legible without opening notebooks. The plate-with-hole run shows the sharper compliance drop, while both demos stay above the `50 mm` steering-radius limit throughout the saved optimization history.
+The profile plot summarizes the optimization history without requiring the notebooks. The plate-with-hole run shows the sharper compliance drop, while both demos stay above the `50 mm` steering-radius limit throughout the saved history.
 
 ## Interactive Output
 
@@ -109,7 +109,7 @@ The optimizer now saves both scalar `history` and geometric `frames` snapshots e
 
 The checked-in surrogate artifact is still a smoke test, not a benchmark. The current saved run uses `64` samples and `10` epochs, reaches validation RMSE `14.376`, and reports inference latency `12.56 ms`.
 
-What changed in the workflow is more important than the absolute number: the repo now persists `outputs/surrogate_smoke/surrogate_validation.npz` with `y_true`, `y_pred`, and `target_names`, so the validation figure is generated from saved artifacts instead of a notebook-only plot.
+The repository persists `outputs/surrogate_smoke/surrogate_validation.npz` with `y_true`, `y_pred`, and `target_names`, so the validation figure is generated from saved artifacts instead of a notebook-only plot.
 
 The surrogate predicts:
 
