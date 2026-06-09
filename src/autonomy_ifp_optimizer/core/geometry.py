@@ -50,6 +50,29 @@ class SurfaceDefinition:
         return payload
 
 
+def surface_from_dict(payload: dict[str, object]) -> SurfaceDefinition:
+    keep_outs = tuple(
+        KeepOutZone(
+            center_uv=(float(zone["center_uv"][0]), float(zone["center_uv"][1])),
+            radius_uv=float(zone["radius_uv"]),
+            label=str(zone.get("label", "keepout")),
+        )
+        for zone in payload.get("keep_outs", [])
+    )
+    params = {str(key): float(value) for key, value in dict(payload.get("params", {})).items()}
+    source_path = payload.get("source_path")
+    return SurfaceDefinition(
+        name=str(payload.get("name", "surface")),
+        kind=str(payload.get("kind", "plate_with_hole")),
+        params=params,
+        start_uv=(float(payload.get("start_uv", [0.0, 0.0])[0]), float(payload.get("start_uv", [0.0, 0.0])[1])),
+        end_uv=(float(payload.get("end_uv", [1.0, 1.0])[0]), float(payload.get("end_uv", [1.0, 1.0])[1])),
+        keep_outs=keep_outs,
+        source_path=None if source_path is None else str(source_path),
+        generation_mode=str(payload.get("generation_mode", "procedural")),
+    )
+
+
 def _normalize(vector: jnp.ndarray, eps: float = 1.0e-8) -> jnp.ndarray:
     norm = jnp.linalg.norm(vector, axis=-1, keepdims=True)
     return vector / jnp.maximum(norm, eps)

@@ -1,72 +1,94 @@
 # Autonomy-IFP-Optimizer
 
-Autonomy-IFP-Optimizer is a differentiable path planner for Infinite Fiber Placement that couples one Bezier fiber course to an orthotropic membrane finite-element solve on a conformal Gmsh shell mesh. Instead of scoring a path with an alignment heuristic, the structural term assembles triangle membrane stiffness matrices, solves for nodal displacements, and minimizes compliance `C = f^T u` inside the optimization loop. On the plate-with-hole demo, the saved run reduces FEM compliance from `0.1143 N*m` to `0.0839 N*m` (`-26.6%`) while moving the path from `-0.137 uv` cutout intrusion to `+0.070 uv` clearance and keeping the entire route above the `50 mm` steering-radius limit.
+Autonomy-IFP-Optimizer is a differentiable Infinite Fiber Placement route planner. It optimizes one cubic Bezier course and one thickness scale directly against an orthotropic membrane FEM, steering-radius limits, thickness buildup, keep-out zones, boundary limits, and control-polygon smoothness.
 
-The current implementation optimizes one fiber course at a time; multi-course cooperative routing is the next architectural step.
+The repository now ships the visual proof with the solver: a saved optimization-evolution GIF, a paired-case showcase figure, a baseline-vs-optimized route comparison, optimization-profile plots, persisted surrogate-validation data, and interactive Plotly HTML exports for the checked-in demo runs.
 
-![Validated workflow showcase](assets/demo_showcase.png)
+![Optimization evolution](assets/optimization_evolution.gif)
 
-## Verified Results
+The hero GIF above is generated from the saved `frames` snapshots in `optimized_path.json`. It shows how the route, Bezier control polygon, and convergence curves evolve together during the optimizer run.
 
-The repository ships two saved demonstration runs in `outputs/`. The tables below compare the initial Bezier baseline against the final optimized result using the same loads, FEM mesh, and manufacturing constraints.
+## What It Solves
+
+- Re-route a single IFP course around keep-outs while improving structural stiffness against a real membrane FEM, not a heuristic alignment score.
+- Keep steering radius, thickness buildup, boundary limits, and keep-out clearance inside the same differentiable objective.
+- Export robot-facing path records with XYZ, tool axis, roll axis, arc length, and local steering radius.
+- Persist an interactive 3D HTML view so the surface mesh, final route, and local tool frame can be inspected directly.
+- Train a Flax surrogate on FEM-labeled samples and save validation predictions for README-quality error plots.
+
+Current scope is deliberate: this repo optimizes one course at a time and exports local tool frames. It does not solve robot joint-space IK, collision checking, or singularity avoidance yet.
+
+## Visual Proof
+
+![Naive vs optimized route tradeoff](assets/naive_vs_optimized_heatmap.png)
+
+The plate-with-hole demo is the clearest saved example. The optimized path removes a `-0.137 uv` cutout intrusion, improves normalized compliance from `0.916` to `0.672`, and still stays above the `50 mm` steering-radius limit. It does that by accepting a more demanding turn near the keep-out, so the route-effort proxy rises from `0.31` to `0.35`. The figure is labeled that way on purpose: it is showing a real trade, not pretending the optimized route is universally easier.
+
+The route-effort colormap is a robot-facing proxy built from steering-radius margin, tool-axis rotation rate, heading change, and keep-out margin. That is the strongest honest metric the current repo can support before a full IK layer exists.
+
+## Saved Demo Results
+
+The repository includes two saved runs in `outputs/` with a baseline seed path and the final optimized result.
 
 ### Drone Frame Cutout Avoidance
 
 | Metric | Baseline | Optimized | Change |
 | --- | ---: | ---: | ---: |
-| FEM compliance `f^T u` | 0.1143 N*m | 0.0839 N*m | -26.6% |
 | Normalized compliance | 0.916 | 0.672 | -26.6% |
 | Loaded-edge displacement | 0.228 mm | 0.169 mm | -26.0% |
 | Peak von Mises stress | 6.36 MPa | 11.09 MPa | +74.4% |
-| Minimum steering radius | 711.1 mm | 106.2 mm | still +56.2 mm above limit |
-| Peak thickness field | 0.075 | 0.155 | below 1.20 limit |
 | Keep-out clearance | -0.137 uv | +0.070 uv | intrusion removed |
+| Minimum steering radius | 711.1 mm | 106.2 mm | still +56.2 mm above limit |
+| Peak routing effort proxy | 0.31 | 0.35 | +11.6% |
 | Estimated cycle time | 1.075 s | 1.176 s | +9.4% |
 | Estimated material usage | 0.439 g | 0.927 g | +111.4% |
 
-The compliance objective minimizes global displacement, not local stress; routing load more directly through the deposited fiber path reduces deflection at the cost of higher peak stress near the deposition zone. The peak value in this demo (`11.09 MPa`) remains far below typical CFRP failure strengths.
+This is the best saved proof case in the repo right now: the route clears the hole, improves stiffness materially, and stays manufacturable against the configured steering limit.
 
 ### Robotic Limb Routing
 
 | Metric | Baseline | Optimized | Change |
 | --- | ---: | ---: | ---: |
-| FEM compliance `f^T u` | 0.1241 N*m | 0.1105 N*m | -10.9% |
 | Normalized compliance | 0.938 | 0.835 | -10.9% |
 | Loaded-edge displacement | 0.191 mm | 0.171 mm | -10.4% |
 | Peak von Mises stress | 2.90 MPa | 4.86 MPa | +67.5% |
 | Minimum steering radius | 180.3 mm | 84.7 mm | still +34.7 mm above limit |
-| Peak thickness field | 0.066 | 0.134 | below 1.20 limit |
-| Keep-out clearance | n/a | n/a | no keep-out zone |
+| Peak routing effort proxy | 0.355 | 0.643 | +81.1% |
 | Estimated cycle time | 1.345 s | 1.586 s | +17.9% |
 | Estimated material usage | 0.549 g | 1.245 g | +126.9% |
 
-The plate-with-hole case is the stronger structural demo because the optimizer reduces FEM compliance and clears the cutout without creating steering failures. The cylindrical case shows the same FEM loop working on an unwrapped curved surface with an axial load.
+The cylinder case proves the same differentiable loop runs on curved geometry and improves stiffness there too. It is not the cleanest manufacturing trade yet, which is why the README leads with the plate-with-hole case.
 
-## Output
+![Saved demo showcase](assets/demo_showcase.png)
 
-The saved `outputs/*/ifp_preview.png` files now show the Gmsh triangle mesh and the solved FEM response, not a structural proxy. Each preview contains the in-plane displacement field, triangle von Mises stress, optimization history, and steering-radius compliance.
+The showcase figure above puts both checked-in demos side by side with the exact metrics exported in `outputs/*/metrics.json`. The cylinder demo has no keep-out zones, so the visual summary now renders that field as `n/a` instead of leaking the internal sentinel value used by the solver.
 
-### Plate With Keep-Out
+## Optimization Profiles
 
-[![Plate-with-hole FEM output preview](outputs/drone_frame_demo/ifp_preview.png)](outputs/drone_frame_demo/ifp_preview.png)
+![Optimization profiles](assets/optimization_profiles.png)
 
-### Cylindrical Routing
+The profile plot makes the optimization behavior legible without opening notebooks. The plate-with-hole run shows the sharper compliance drop, while both demos stay above the `50 mm` steering-radius limit throughout the saved optimization history.
 
-[![Cylindrical FEM output preview](outputs/robotic_limb_demo/ifp_preview.png)](outputs/robotic_limb_demo/ifp_preview.png)
+## Interactive Output
 
-## Structural Model
+GitHub does not render checked-in `.html` files inline. In the repo browser it shows the HTML source, not the Plotly scene. Open these files locally in a browser after cloning or downloading the repository:
 
-Manufacturability is part of the optimization state, but the structural term is now a finite-element solve rather than an analytic alignment score.
+- `outputs/drone_frame_demo/interactive_toolpath.html`
+- `outputs/robotic_limb_demo/interactive_toolpath.html`
 
-The optimizer treats one cubic Bezier course and one continuous thickness scale as the design variables. At every gradient step it:
+Each HTML export is now self-contained. It includes the reconstructed surface mesh, the baseline seed path, the optimized path, and sampled tool-axis / roll-axis vectors without depending on a remote Plotly CDN.
 
-1. samples the Bezier course in UV and maps it onto the surface and the mid-surface FEM coordinates,
-2. builds a local fiber-orientation field from the path tangent and a Gaussian tow-footprint field,
-3. assembles an orthotropic membrane stiffness for every active element,
-4. solves the reduced linear system for nodal displacements, and
-5. combines compliance with the manufacturing penalties into one scalar objective.
+## Current Workflow
 
-The loss is:
+At every optimization step, the solver:
+
+1. samples one cubic Bezier course in UV and maps it onto the analytic surface and the FEM mid-surface coordinates,
+2. derives local tangent and normal directions and a Gaussian tow-footprint field,
+3. assembles an orthotropic `tri3` membrane stiffness field on a conformal Gmsh mesh,
+4. solves the reduced linear system for nodal displacements and evaluates compliance, and
+5. combines structural and manufacturing penalties into one scalar loss before taking an Adam step.
+
+The current loss is:
 
 ```text
 total_loss =
@@ -79,114 +101,61 @@ total_loss =
   + smoothness_weight * smoothness_penalty
 ```
 
-### Finite-Element Formulation
+The optimizer now saves both scalar `history` and geometric `frames` snapshots every `history_stride` steps. Those saved frames are what drive the GIF in `assets/optimization_evolution.gif`.
 
-The structural solve uses a conformal first-order triangular membrane mesh generated with the Gmsh OpenCascade kernel. The plate-with-hole demo trims the cutout directly in the CAD kernel and refines the local mesh around the keep-out; the checked-in run uses `216` nodes and `364` `tri3` elements. The cylinder is solved on its unwrapped `(s, z)` mid-surface with a uniform Gmsh shell mesh; the checked-in run uses `271` nodes and `482` `tri3` elements.
+## Surrogate Validation
 
-For each element:
+![Surrogate validation](assets/surrogate_validation.png)
 
-```text
-A_e = t_matrix * Q_iso + t_fiber(u, v) * Qbar(theta)
-K_e = area_e * B_e^T * A_e * B_e
-```
+The checked-in surrogate artifact is still a smoke test, not a benchmark. The current saved run uses `64` samples and `10` epochs, reaches validation RMSE `14.376`, and reports inference latency `12.56 ms`.
 
-where:
+What changed in the workflow is more important than the absolute number: the repo now persists `outputs/surrogate_smoke/surrogate_validation.npz` with `y_true`, `y_pred`, and `target_names`, so the validation figure is generated from saved artifacts instead of a notebook-only plot.
 
-- `Q_iso` is an isotropic plane-stress matrix for the baseline laminate,
-- `Qbar(theta)` is the rotated orthotropic ply constitutive matrix,
-- `t_fiber(u, v)` comes from a smooth tow-footprint field tied to the current path, and
-- `B_e` is the constant membrane strain-displacement matrix for each `tri3` element.
+The surrogate predicts:
 
-Boundary tractions are integrated over the loaded edge line elements, the opposite edge is clamped, and the global system is reduced to the free degrees of freedom:
-
-```text
-K_ff * u_f = f_f
-compliance = f^T * u
-normalized_compliance = compliance / compliance_reference
-```
-
-`compliance_reference` is the response of the matrix-only baseline membrane for the same mesh and load case. That keeps the structural term well-scaled for optimization while preserving an actual FEM compliance value in the outputs.
-
-### Manufacturing Constraints in the Gradient Loop
-
+- `total_loss`
+- `normalized_compliance`
 - `steering_penalty`
-  Uses the sampled 3D Bezier curvature and activates when the local steering radius falls below the configured minimum.
 - `thickness_penalty`
-  Accumulates a Gaussian deposition field on a `coverage_grid x coverage_grid` UV grid and penalizes over-thickness and non-uniform buildup.
 - `keepout_penalty`
-  Applies a softplus signed-distance barrier around holes, inserts, and cutouts.
-- `boundary_penalty`
-  Penalizes UV coordinates outside the valid parameter domain.
-- `smoothness_penalty`
-  Penalizes the second difference of the Bezier control polygon.
 
-The same `thickness_scale` variable appears in both the manufacturing thickness field and the FEM reinforcement field, so the route is trading off real stiffness response against manufacturability rather than optimizing two unrelated models.
+## Quick Start
 
-## Why Differentiable Path Planning Matters for IFP
-
-Manual IFP programming is usually an outer loop: sketch a course, run a structural or manufacturability check, adjust the route, and repeat. That loop becomes a bottleneck when the steering limit changes, a cutout moves, or a new surface variant arrives.
-
-This repository keeps the structural solve and the manufacturing penalties inside the same differentiable objective. When the geometry or process limits change, rerun the optimizer and get a new route with updated stiffness, displacement, steering, thickness, and keep-out behavior rather than restarting from a hand-authored path.
-
-## Surrogate Component
-
-The Flax surrogate is trained on FEM-labeled optimizer outputs, not on an alignment proxy. It predicts:
-
-- total loss,
-- normalized compliance,
-- steering penalty,
-- thickness penalty, and
-- keep-out penalty.
-
-The checked-in smoke test in `outputs/surrogate_smoke/surrogate_metrics.json` is a functional pipeline check, not a trained surrogate benchmark. It uses `64` samples and `10` epochs, which is enough to validate dataset generation, serialization, and forward-pass latency, but not to characterize model accuracy. Production surrogate quality requires `1,000+` samples and `200+` epochs.
-
-The smoke test reports:
-
-- training samples: `64`
-- epochs: `10`
-- surrogate inference latency: `11.41 ms`
-
-The intended workflow is to use the surrogate to screen many candidate courses quickly, then refine promising candidates with the full differentiable FEM objective.
-
-## Roadmap
-
-- Extend the optimizer from one-course routing to multi-course cooperative planning and sequencing.
-- Replace the current dense direct solve with a sparse CG solver to extend the FEM to production-scale mesh densities.
-- Expand the geometry stack from supported analytic surface families to imported CAD-driven shell extraction and meshing.
-
-## CLI Workflow
-
-Run the full optimization on the plate-with-hole demo:
+Optimize the plate-with-hole demo:
 
 ```bash
-python main.py optimize --surface plate_with_hole --load 500 --min-radius 50
+python main.py optimize --surface plate_with_hole --load 500 --min-radius 50 --outdir outputs/drone_frame_demo
 ```
 
-Switch to the cylindrical demo:
+Optimize the cylindrical demo:
 
 ```bash
-python main.py optimize --surface cylinder --load 650 --direction 0,0,1
+python main.py optimize --surface cylinder --load 650 --direction 0,0,1 --outdir outputs/robotic_limb_demo
 ```
 
-Export robot-facing kinematics from an existing optimized path:
+Re-export robot-facing artifacts from an existing path JSON:
 
 ```bash
-python main.py export --input outputs/optimized_path.json --format json
+python main.py export --input outputs/drone_frame_demo/optimized_path.json --format json --outdir outputs/drone_frame_demo
 ```
 
-Train the Flax surrogate on generated samples:
+Train a larger surrogate run:
 
 ```bash
-python main.py train-surrogate --samples 1000 --epochs 250
+python main.py train-surrogate --samples 1000 --epochs 250 --batch-size 64 --surface plate_with_hole --outdir outputs/surrogate_run
 ```
 
-Note: Gmsh now generates the conformal FE mesh for the supported surface families. Passing a CAD or mesh file still uses the part bounds and filename to infer one of those supported families; arbitrary shell extraction from arbitrary CAD is not implemented yet.
+Regenerate the README assets from the saved demo outputs:
+
+```bash
+python tools/generate_readme_assets.py
+```
 
 ## Python API
 
 ```python
 from autonomy_ifp_optimizer import GeometryConfig, LoadCase, OptimizationConfig, load_surface, optimize_ifp_path
-from autonomy_ifp_optimizer.export.toolpath import compute_metrics
+from autonomy_ifp_optimizer.export.toolpath import compute_metrics, write_interactive_toolpath_html
 
 surface = load_surface(
     surface="plate_with_hole",
@@ -198,105 +167,48 @@ result = optimize_ifp_path(
     config=OptimizationConfig(),
 )
 metrics = compute_metrics(result)
+write_interactive_toolpath_html(result, "outputs/demo")
 
-print(metrics["compliance_n_m"])
-print(metrics["maximum_displacement_mm"])
+print(metrics["normalized_compliance"])
 print(metrics["min_steering_radius_mm"])
+print(metrics["peak_routing_effort"])
 ```
 
 ## Generated Artifacts
 
 After `optimize`, the repository writes:
 
-- `outputs/optimized_path.json`
-  Full optimization result including control points, path samples, steering-radius profile, and a `fem` block with nodal displacements, element membrane matrices, element strains, and element stresses.
-- `outputs/metrics.json`
-  Structural, manufacturability, and process metrics including compliance, displacement, stress, cycle time, and material usage.
-- `outputs/ifp_kinematics.json` or `outputs/ifp_kinematics.csv`
-  Robot-facing path records with XYZ positions, surface normals, tangents, binormals, arc length, and local steering radius.
-- `outputs/ifp_preview.png`
-  Preview figure showing FEM displacement magnitude, element von Mises stress, optimization history, and manufacturability.
+- `outputs/*/optimized_path.json`
+  Full optimization result including the final path, `baseline`, `history`, `frames`, and the serialized FEM response.
+- `outputs/*/metrics.json`
+  Structural, manufacturability, and process metrics including compliance, displacement, stress, cycle time, material usage, and the routing-effort proxy.
+- `outputs/*/interactive_toolpath.html`
+  Self-contained Plotly export with the surface mesh, baseline seed path, optimized path, tool axis, and roll axis. Open this locally in a browser; GitHub will show the HTML source instead of rendering it.
+- `outputs/*/ifp_kinematics.json` or `outputs/*/ifp_kinematics.csv`
+  Robot-facing path records with XYZ, normals, tangents, binormals, arc length, and local steering radius.
+- `outputs/*/ifp_preview.png`
+  Static FEM preview with displacement, stress, optimization history, and steering-radius compliance.
 
 After `train-surrogate`, the repository writes:
 
-- `outputs/surrogate_dataset.npz`
-- `outputs/surrogate_params.msgpack`
-- `outputs/surrogate_metrics.json`
+- `outputs/*/surrogate_dataset.npz`
+- `outputs/*/surrogate_params.msgpack`
+- `outputs/*/surrogate_metrics.json`
+- `outputs/*/surrogate_validation.npz`
 
-To regenerate the README assets from the saved demo outputs:
+The README asset script writes:
 
-```bash
-python tools/generate_readme_assets.py
-```
+- `assets/optimization_evolution.gif`
+- `assets/naive_vs_optimized_heatmap.png`
+- `assets/surrogate_validation.png`
+- `assets/demo_showcase.png`
+- `assets/optimization_profiles.png`
 
-## Example Notebooks
+## Limitations
 
-- `examples/drone_frame_cutout_avoidance.ipynb`
-  Plate-with-hole workflow from geometry inspection through optimization, FEM response, toolpath export, and process metrics.
-- `examples/robotic_limb_optimization.ipynb`
-  Cylindrical workflow from surface setup through optimized routing, FEM response, robotic kinematics export, and manufacturing metrics.
+- The planner currently optimizes one course at a time. It does not do multi-course sequencing, overlap scheduling, or coverage planning.
+- The structural model is an orthotropic membrane FEM with a dense direct solve. It is not a full shell model and does not include bending, progressive damage, or ply drop logic.
+- The geometry stack supports analytic plate and cylinder families with Gmsh-generated conformal meshes. Arbitrary CAD shell extraction is not implemented.
+- The robot export provides local tool frames only. There is no joint-space planning, collision checking, or singularity avoidance in the current repo.
 
-## Repository Components
-
-- `core/fem.py`
-  Assembles orthotropic `tri3` membrane stiffness matrices, applies edge tractions and clamps, and solves for nodal displacements.
-- `core/meshing.py`
-  Builds the conformal Gmsh shell mesh for the supported surface families and extracts triangle connectivity and boundary line elements.
-- `core/physics.py`
-  Couples the Bezier design variables to the FEM response and the manufacturing penalties inside one differentiable objective.
-- `core/constraints.py`
-  Evaluates steering, thickness, keep-out, boundary, and smoothness penalties.
-- `core/geometry.py`
-  Defines the analytic surfaces, surface parameterizations, keep-out signed-distance fields, and mid-surface coordinates used by the FEM model.
-- `export/toolpath.py`
-  Converts optimized paths into robot-ready kinematic records and process metrics.
-- `ai_surrogate/train_flax_model.py`
-  Generates FEM-labeled samples and trains the Flax surrogate that approximates the optimizer objective.
-
-## Repository Layout
-
-```text
-Autonomy-IFP-Optimizer/
-  assets/
-    demo_showcase.png
-    drone_frame_output_breakdown.png
-    toolpath_diagnostics.png
-    optimization_profiles.png
-    robotic_limb_output_breakdown.png
-  examples/
-    drone_frame_cutout_avoidance.ipynb
-    robotic_limb_optimization.ipynb
-    drone_plate.obj
-  outputs/
-    drone_frame_demo/
-    robotic_limb_demo/
-    surrogate_smoke/
-  src/autonomy_ifp_optimizer/
-    ai_surrogate/
-      train_flax_model.py
-    core/
-      constraints.py
-      fem.py
-      geometry.py
-      meshing.py
-      physics.py
-    export/
-      toolpath.py
-    cli.py
-    config.py
-    visualize.py
-  tools/
-    generate_readme_assets.py
-  main.py
-```
-
-## Scope and Limitations
-
-This repository is materially stronger than the earlier heuristic model, but it is still a reduced-order structural planner rather than a production composite analysis stack.
-
-- The structural term is an orthotropic membrane FEM with a dense direct solve in the current implementation. It does not include bending stiffness, out-of-plane displacement, progressive damage, ply drop-off logic, or a full shell formulation.
-- The plate and cylinder demos use analytic surface families and Gmsh-generated conformal triangle meshes. Arbitrary CAD parameterization and imported shell extraction are not implemented.
-- The planner optimizes one Bezier course at a time. It does not do coverage planning, multi-course sequencing, seam management, or overlap scheduling.
-- The robot export provides local tool orientation from the optimized surface path, but it does not do joint-space planning, collision checking, or singularity avoidance.
-
-Those limits are deliberate. The goal of this repository is to show that a differentiable IFP route can be optimized against an actual stiffness solve and manufacturing constraints at the same time, before scaling the geometry and planning stack further.
+Those limits are intentional. The goal of this repository is to show a differentiable IFP route optimizer that couples real structural response, manufacturing constraints, robot-facing exports, and surrogate infrastructure in one coherent workflow.

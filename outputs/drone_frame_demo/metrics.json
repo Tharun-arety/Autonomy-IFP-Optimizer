@@ -35,5 +35,7 @@
   "estimated_cycle_time_min": 0.01959739203485465,
   "estimated_material_weight_kg": 0.000927080652014446,
   "estimated_material_weight_g": 0.927080652014446,
-  "toolpath_points": 160
+  "toolpath_points": 160,
+  "mean_routing_effort": 0.14801909069756145,
+  "peak_routing_effort": 0.34625581400188615
 }

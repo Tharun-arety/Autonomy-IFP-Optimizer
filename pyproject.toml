@@ -19,6 +19,8 @@ dependencies = [
     "trimesh",
     "pyvista",
     "matplotlib",
+    "Pillow",
+    "plotly",
 ]
 
 [project.scripts]

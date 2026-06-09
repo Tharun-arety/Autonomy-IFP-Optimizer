@@ -7,7 +7,14 @@ from .ai_surrogate.train_flax_model import train_surrogate
 from .config import ExportConfig, GeometryConfig, LoadCase, OptimizationConfig, SurrogateConfig
 from .core.geometry import load_surface
 from .core.physics import optimize_ifp_path
-from .export.toolpath import compute_metrics, export_kinematics, load_optimized_path, write_metrics, write_optimized_path
+from .export.toolpath import (
+    compute_metrics,
+    export_kinematics,
+    load_optimized_path,
+    write_interactive_toolpath_html,
+    write_metrics,
+    write_optimized_path,
+)
 from .visualize import save_preview
 
 
@@ -68,10 +75,24 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
     export_config = ExportConfig(output_dir=outdir)
     result["metrics"] = compute_metrics(result, export_config)
+    baseline = result.get("baseline")
+    if isinstance(baseline, dict):
+        baseline_result = {
+            "surface": result["surface"],
+            "optimization_config": result["optimization_config"],
+            "metrics": baseline.get("metrics", {}),
+            "path_uv": baseline["path_uv"],
+            "path_xyz": baseline["path_xyz"],
+            "normals": baseline["normals"],
+            "tangents": baseline["tangents"],
+            "radius_profile_m": baseline["radius_profile_m"],
+        }
+        baseline["metrics"] = compute_metrics(baseline_result, export_config)
     save_preview(result, outdir)
     write_optimized_path(result, outdir)
     write_metrics(result["metrics"], outdir)
     export_kinematics(result, outdir, fmt=args.format)
+    write_interactive_toolpath_html(result, outdir)
 
     print(f"Optimized surface     : {result['surface']['name']} ({result['surface']['kind']})")
     print(f"Objective             : {result['metrics']['objective']:.4f}")
@@ -91,6 +112,7 @@ def _run_export(args: argparse.Namespace) -> int:
     output = export_kinematics(result, args.outdir, fmt=args.format)
     metrics = compute_metrics(result)
     write_metrics(metrics, args.outdir)
+    write_interactive_toolpath_html(result, args.outdir)
     print(f"Kinematics exported to {output}")
     return 0
 
@@ -105,6 +127,7 @@ def _run_train(args: argparse.Namespace) -> int:
     print(f"Dataset written to    : {artifacts['dataset_path']}")
     print(f"Metrics written to    : {artifacts['metrics_path']}")
     print(f"Model parameters      : {artifacts['params_path']}")
+    print(f"Validation samples    : {artifacts['validation_path']}")
     print(f"Validation RMSE       : {artifacts['validation_rmse']:.4f}")
     print(f"Inference latency     : {artifacts['inference_latency_ms']:.3f} ms")
     return 0

@@ -14,6 +14,14 @@ from ..core.fem import prepare_membrane_fem_model
 from ..core.geometry import load_surface
 from ..core.physics import control_points_from_raw, evaluate_raw_design
 
+SURROGATE_TARGET_NAMES = [
+    "total_loss",
+    "normalized_compliance",
+    "steering_penalty",
+    "thickness_penalty",
+    "keepout_penalty",
+]
+
 
 def generate_dataset(
     surface_name: str,
@@ -168,8 +176,17 @@ def train_surrogate(
     dataset_path = output_dir / "surrogate_dataset.npz"
     params_path = output_dir / "surrogate_params.msgpack"
     metrics_path = output_dir / "surrogate_metrics.json"
+    validation_path = output_dir / "surrogate_validation.npz"
 
     np.savez(dataset_path, features=np.asarray(features), targets=np.asarray(targets))
+    np.savez(
+        validation_path,
+        target_names=np.asarray(SURROGATE_TARGET_NAMES),
+        y_true=np.asarray(val_y),
+        y_pred=np.asarray(denormalized_prediction),
+        y_true_normalized=np.asarray(norm_val_y),
+        y_pred_normalized=np.asarray(val_prediction),
+    )
     params_path.write_bytes(serialization.to_bytes(params))
     metrics_path.write_text(
         json.dumps(
@@ -177,6 +194,7 @@ def train_surrogate(
                 "surface": surface_name,
                 "samples": config.samples,
                 "epochs": config.epochs,
+                "target_names": SURROGATE_TARGET_NAMES,
                 "validation_mse_normalized": float(val_mse),
                 "validation_rmse": validation_rmse,
                 "inference_latency_ms": inference_latency_ms,
@@ -191,6 +209,7 @@ def train_surrogate(
         "dataset_path": str(dataset_path),
         "params_path": str(params_path),
         "metrics_path": str(metrics_path),
+        "validation_path": str(validation_path),
         "validation_rmse": validation_rmse,
         "inference_latency_ms": inference_latency_ms,
     }

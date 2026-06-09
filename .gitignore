@@ -6,6 +6,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+assets/_*.png
+assets/gif_frame*.png
 dist/
 build/
 *.egg-info/

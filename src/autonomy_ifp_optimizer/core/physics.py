@@ -194,11 +194,107 @@ def _scalar_history_entry(step: int, aux: dict[str, jnp.ndarray]) -> dict[str, f
         "peak_thickness": float(aux["peak_thickness"]),
         "minimum_keepout_clearance_uv": float(aux["minimum_keepout_clearance_uv"]),
         "maximum_displacement_m": float(fem["maximum_displacement_m"]),
+        "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
         "solver_residual_norm": float(fem["solver_residual_norm"]),
         "steering_penalty": float(aux["steering_penalty"]),
         "thickness_penalty": float(aux["thickness_penalty"]),
         "keepout_penalty": float(aux["keepout_penalty"]),
     }
+
+
+def _metrics_from_aux(aux: dict[str, jnp.ndarray], config: OptimizationConfig) -> dict[str, object]:
+    fem = aux["fem"]
+    metrics = {
+        "objective": float(aux["loss"]),
+        "compliance_n_m": float(aux["compliance_n_m"]),
+        "normalized_compliance": float(aux["normalized_compliance"]),
+        "reference_compliance_n_m": float(aux["reference_compliance_n_m"]),
+        "path_length_m": float(aux["path_length_m"]),
+        "length_ratio": float(aux["length_ratio"]),
+        "min_steering_radius_m": float(aux["min_steering_radius_m"]),
+        "min_steering_radius_mm": 1000.0 * float(aux["min_steering_radius_m"]),
+        "radius_limit_mm": 1000.0 * config.min_steering_radius_m,
+        "peak_thickness": float(aux["peak_thickness"]),
+        "mean_thickness": float(aux["mean_thickness"]),
+        "thickness_std": float(aux["thickness_std"]),
+        "thickness_limit": config.max_thickness,
+        "minimum_keepout_clearance_uv": float(aux["minimum_keepout_clearance_uv"]),
+        "thickness_scale": float(aux["thickness_scale"]),
+        "maximum_displacement_m": float(fem["maximum_displacement_m"]),
+        "maximum_displacement_mm": 1000.0 * float(fem["maximum_displacement_m"]),
+        "mean_loaded_edge_displacement_m": float(fem["mean_loaded_edge_displacement_m"]),
+        "mean_loaded_edge_displacement_mm": 1000.0 * float(fem["mean_loaded_edge_displacement_m"]),
+        "maximum_von_mises_pa": float(jnp.max(fem["element_von_mises_pa"])),
+        "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
+        "solver_residual_norm": float(fem["solver_residual_norm"]),
+        "finite_element_mesh": {
+            "generator": "gmsh",
+            "element_type": "tri3",
+            "nodes": int(fem["mesh_node_count"]),
+            "elements": int(fem["mesh_element_count"]),
+            "target_size_mm": 1000.0 * config.mesh_target_size_m,
+            "refined_size_mm": 1000.0 * config.mesh_refined_size_m,
+        },
+    }
+    metrics["manufacturable"] = bool(
+        metrics["min_steering_radius_m"] >= config.min_steering_radius_m
+        and metrics["peak_thickness"] <= config.max_thickness
+        and metrics["minimum_keepout_clearance_uv"] >= 0.0
+    )
+    return metrics
+
+
+def _design_snapshot(
+    aux: dict[str, jnp.ndarray],
+    *,
+    include_fem: bool = False,
+    include_thickness_field: bool = False,
+) -> dict[str, object]:
+    fem = aux["fem"]
+    snapshot: dict[str, object] = {
+        "control_points_uv": np.asarray(aux["control_points_uv"]).tolist(),
+        "path_uv": np.asarray(aux["path_uv"]).tolist(),
+        "path_xyz": np.asarray(aux["path_xyz"]).tolist(),
+        "normals": np.asarray(aux["normals"]).tolist(),
+        "tangents": np.asarray(aux["tangents"]).tolist(),
+        "radius_profile_m": np.asarray(aux["radius_profile_m"]).tolist(),
+        "thickness_scale": float(aux["thickness_scale"]),
+        "metrics": {
+            "loss": float(aux["loss"]),
+            "compliance_n_m": float(aux["compliance_n_m"]),
+            "normalized_compliance": float(aux["normalized_compliance"]),
+            "path_length_m": float(aux["path_length_m"]),
+            "min_steering_radius_m": float(aux["min_steering_radius_m"]),
+            "minimum_keepout_clearance_uv": float(aux["minimum_keepout_clearance_uv"]),
+            "peak_thickness": float(aux["peak_thickness"]),
+            "maximum_displacement_m": float(fem["maximum_displacement_m"]),
+            "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
+            "steering_penalty": float(aux["steering_penalty"]),
+            "thickness_penalty": float(aux["thickness_penalty"]),
+            "keepout_penalty": float(aux["keepout_penalty"]),
+        },
+    }
+    if include_thickness_field:
+        snapshot["thickness_field"] = np.asarray(aux["thickness_field"]).tolist()
+    if include_fem:
+        snapshot["fem"] = _serialize_mapping(fem)
+    return snapshot
+
+
+def _frame_entry(
+    step: int,
+    aux: dict[str, jnp.ndarray],
+    *,
+    best_step: int | None = None,
+    is_best: bool = False,
+) -> dict[str, object]:
+    payload = _design_snapshot(aux)
+    payload["step"] = float(step)
+    if best_step is not None:
+        payload["best_step"] = float(best_step)
+    if is_best:
+        payload["is_best"] = True
+    return payload
 
 
 def _serialize_mapping(mapping: dict[str, object]) -> dict[str, object]:
@@ -227,6 +323,7 @@ def optimize_ifp_path(
     fem_model = prepare_membrane_fem_model(surface, load_case, config)
 
     raw_params = initial_raw_params(surface, config)
+    baseline = evaluate_raw_design(raw_params, surface, load_case, config, fem_model=fem_model)
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.grad_clip_norm),
         optax.adam(config.learning_rate),
@@ -235,7 +332,10 @@ def optimize_ifp_path(
 
     best_params = raw_params
     best_loss = jnp.inf
+    best_step = 0
+    best_aux = baseline
     history: list[dict[str, float]] = []
+    frames: list[dict[str, object]] = []
 
     def loss_fn(params: jnp.ndarray) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         aux = evaluate_raw_design(params, surface, load_case, config, fem_model=fem_model)
@@ -252,49 +352,17 @@ def optimize_ifp_path(
         if loss_value < best_loss:
             best_loss = loss_value
             best_params = current_params
+            best_step = step
+            best_aux = aux
 
         if step % config.history_stride == 0 or step == config.steps - 1:
             history.append(_scalar_history_entry(step, aux))
+            frames.append(_frame_entry(step, aux))
 
     final = evaluate_raw_design(best_params, surface, load_case, config, fem_model=fem_model)
-    fem = final["fem"]
-    metrics = {
-        "objective": float(final["loss"]),
-        "compliance_n_m": float(final["compliance_n_m"]),
-        "normalized_compliance": float(final["normalized_compliance"]),
-        "reference_compliance_n_m": float(final["reference_compliance_n_m"]),
-        "path_length_m": float(final["path_length_m"]),
-        "length_ratio": float(final["length_ratio"]),
-        "min_steering_radius_m": float(final["min_steering_radius_m"]),
-        "min_steering_radius_mm": 1000.0 * float(final["min_steering_radius_m"]),
-        "radius_limit_mm": 1000.0 * config.min_steering_radius_m,
-        "peak_thickness": float(final["peak_thickness"]),
-        "mean_thickness": float(final["mean_thickness"]),
-        "thickness_std": float(final["thickness_std"]),
-        "thickness_limit": config.max_thickness,
-        "minimum_keepout_clearance_uv": float(final["minimum_keepout_clearance_uv"]),
-        "thickness_scale": float(final["thickness_scale"]),
-        "maximum_displacement_m": float(fem["maximum_displacement_m"]),
-        "maximum_displacement_mm": 1000.0 * float(fem["maximum_displacement_m"]),
-        "mean_loaded_edge_displacement_m": float(fem["mean_loaded_edge_displacement_m"]),
-        "mean_loaded_edge_displacement_mm": 1000.0 * float(fem["mean_loaded_edge_displacement_m"]),
-        "maximum_von_mises_pa": float(jnp.max(fem["element_von_mises_pa"])),
-        "maximum_von_mises_mpa": 1.0e-6 * float(jnp.max(fem["element_von_mises_pa"])),
-        "solver_residual_norm": float(fem["solver_residual_norm"]),
-        "finite_element_mesh": {
-            "generator": "gmsh",
-            "element_type": "tri3",
-            "nodes": int(fem["mesh_node_count"]),
-            "elements": int(fem["mesh_element_count"]),
-            "target_size_mm": 1000.0 * config.mesh_target_size_m,
-            "refined_size_mm": 1000.0 * config.mesh_refined_size_m,
-        },
-    }
-    metrics["manufacturable"] = bool(
-        metrics["min_steering_radius_m"] >= config.min_steering_radius_m
-        and metrics["peak_thickness"] <= config.max_thickness
-        and metrics["minimum_keepout_clearance_uv"] >= 0.0
-    )
+    if not frames or abs(float(frames[-1]["metrics"]["loss"]) - float(final["loss"])) > 1.0e-8:
+        frames.append(_frame_entry(config.steps - 1, final, best_step=best_step, is_best=True))
+    metrics = _metrics_from_aux(final, config)
 
     objective_terms = {
         "loss": float(final["loss"]),
@@ -321,7 +389,12 @@ def optimize_ifp_path(
         "radius_profile_m": np.asarray(final["radius_profile_m"]).tolist(),
         "thickness_field": np.asarray(final["thickness_field"]).tolist(),
         "fem": _serialize_mapping(final["fem"]),
+        "baseline": {
+            **_design_snapshot(baseline, include_fem=True, include_thickness_field=True),
+            "metrics": _metrics_from_aux(baseline, config),
+        },
         "objective_terms": objective_terms,
         "metrics": metrics,
         "history": history,
+        "frames": frames,
     }
